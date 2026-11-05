@@ -6,3 +6,11 @@ dist
 !.env.example
 *.log
 .DS_Store
+
+# Outillage local (Claude Code / ruflo) : propre à chaque poste, jamais partagé
+.claude/
+.claude-flow/
+.swarm/
+CLAUDE.md
+.mcp.json
+ruvector.db
