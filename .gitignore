@@ -14,3 +14,17 @@ dist
 CLAUDE.md
 .mcp.json
 ruvector.db
+
+# Swift
+.build/
+.swiftpm/
+*.xcodeproj/xcuserdata/
+DerivedData/
+
+# Gradle / Android
+.gradle/
+/kotlin/**/build/
+local.properties
+.kotlin/
+*.iml
+.idea/
