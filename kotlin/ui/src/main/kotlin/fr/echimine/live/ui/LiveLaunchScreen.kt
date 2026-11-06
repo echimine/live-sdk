@@ -44,6 +44,7 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import fr.echimine.live.core.Live
 import fr.echimine.live.core.LiveClient
+import fr.echimine.live.core.visibleLength
 import fr.echimine.live.core.LiveResult
 import fr.echimine.live.core.LiveSdk
 import kotlinx.coroutines.launch
@@ -125,7 +126,7 @@ public fun LiveLaunchScreen(
                         value = title,
                         onValueChange = { title = limitGraphemes(it, TITLE_MAX) },
                         label = { Text("Titre (facultatif)") },
-                        supportingText = { Text("${graphemeCount(title)} / $TITLE_MAX") },
+                        supportingText = { Text("${visibleLength(title)} / $TITLE_MAX") },
                         singleLine = true,
                         shape = MaterialTheme.shapes.medium,
                         colors = OutlinedTextFieldDefaults.colors(

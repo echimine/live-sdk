@@ -24,13 +24,19 @@ import kotlinx.coroutines.withTimeoutOrNull
 import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
+import kotlin.time.TimeMark
+import kotlin.time.TimeSource
 
 /** État observable d'un Live ouvert. */
 public data class LiveState(
     val connection: Connection,
     /** `null` tant que le premier `snapshot` n'est pas arrivé. */
     val live: LiveDetails? = null,
+    /** `true` après un `rate_limited` du chat, le temps indiqué par le serveur : afficher « Doucement… ». */
+    val chatLocked: Boolean = false,
 ) {
     public sealed interface Connection {
         /** Première connexion en cours. */
@@ -95,7 +101,10 @@ public data class LiveDetails(
 
 /** Événements ponctuels, à animer plutôt qu'à afficher en continu. */
 public sealed interface LiveEvent {
-    /** Réactions reçues sur la dernière fenêtre (500 ms), par emoji. */
+    /**
+     * Réactions à animer, par emoji : celles de tous sur la dernière fenêtre du serveur (500 ms),
+     * et la sienne aussitôt envoyée (retirée de la fenêtre suivante, pour ne pas l'animer deux fois).
+     */
     public data class ReactionsReceived(val counts: Map<String, Int>) : LiveEvent
 
     /** Une Annonce d'achat vient d'arriver dans le chat. */
@@ -111,8 +120,10 @@ public class Live internal constructor(
     private val url: String,
     private val tokenProvider: TokenProvider,
     private val transport: LiveTransport,
+    configFlow: StateFlow<LiveConfig>,
     parent: CoroutineScope,
     dispatcher: CoroutineDispatcher,
+    private val timeSource: TimeSource,
 ) {
     private val scope = CoroutineScope(SupervisorJob(parent.coroutineContext[Job]) + dispatcher)
     private val stateFlow = MutableStateFlow(LiveState(LiveState.Connection.Connecting))
@@ -120,10 +131,26 @@ public class Live internal constructor(
     private val pending = ConcurrentHashMap<String, CompletableDeferred<LiveResult<Unit>>>()
     private val refs = AtomicInteger()
 
+    /**
+     * Ses Réactions déjà animées localement, pas encore retrouvées dans une fenêtre du serveur :
+     * envoyées depuis la dernière fenêtre, et reportées de la précédente (oubliées ensuite).
+     */
+    private val ownReactionsLock = Any()
+    private var ownSinceLastWindow = mutableMapOf<String, Int>()
+    private var ownCarried = mutableMapOf<String, Int>()
+
     @Volatile
     private var activeSocket: WebSocketConnection? = null
 
+    /** Fin du verrou du chat posé par le dernier `rate_limited` ; gardés par [chatLock]. */
+    private val chatLock = Any()
+    private var chatUnlockAt: TimeMark? = null
+    private var chatUnlockJob: Job? = null
+
     public val state: StateFlow<LiveState> = stateFlow.asStateFlow()
+
+    /** Config commune, à jour après chaque rechargement : jeu de Réactions, longueur maximale du chat… */
+    public val config: StateFlow<LiveConfig> = configFlow
     public val events: SharedFlow<LiveEvent> = eventFlow.asSharedFlow()
 
     @OptIn(InternalLiveSdkApi::class)
@@ -172,8 +199,48 @@ public class Live internal constructor(
     public suspend fun removeCohost(participantId: String): LiveResult<Unit> =
         command { Command.RemoveCohost(it, participantId) }
 
-    /** Envoie un message (1 à `config.chatMaxLength` caractères visibles après `trim`). */
-    public suspend fun sendMessage(text: String): LiveResult<Unit> = command { Command.SendMessage(it, text) }
+    /**
+     * Envoie un message, après `trim`. Vide ou au-delà de `config.chatMaxLength` caractères
+     * visibles, il est refusé sans rien envoyer ([LiveErrorCode.InvalidMessage]).
+     */
+    @OptIn(InternalLiveSdkApi::class)
+    public suspend fun sendMessage(text: String): LiveResult<Unit> {
+        val trimmed = text.trim()
+        val max = config.value.chatMaxLength
+        if (visibleLength(trimmed) !in 1..max) {
+            return LiveResult.Failure(
+                LiveError(LiveErrorCode.InvalidMessage, "Un message fait de 1 à $max caractères visibles."),
+            )
+        }
+        val remaining = synchronized(chatLock) { chatUnlockAt }?.let { -it.elapsedNow() }
+        if (remaining != null && remaining.isPositive()) {
+            return LiveResult.Failure(
+                LiveError(LiveErrorCode.RateLimited, "Doucement…", remaining.inWholeMilliseconds.coerceAtLeast(1)),
+            )
+        }
+        val result = command { Command.SendMessage(it, trimmed) }
+        if (result is LiveResult.Failure && result.error.code == LiveErrorCode.RateLimited) {
+            lockChat((result.error.retryAfterMs ?: DEFAULT_CHAT_LOCK_MS).milliseconds)
+        }
+        return result
+    }
+
+    /** Verrouille le chat pour [duration], puis le rouvre de lui-même. */
+    private fun lockChat(duration: Duration) = synchronized(chatLock) {
+        if (chatUnlockAt?.let { -it.elapsedNow() > duration } == true) return@synchronized // un verrou plus long court déjà
+        val unlockAt = timeSource.markNow() + duration
+        chatUnlockAt = unlockAt
+        stateFlow.update { it.copy(chatLocked = true) }
+        chatUnlockJob?.cancel()
+        chatUnlockJob = scope.launch {
+            delay(duration)
+            synchronized(chatLock) {
+                if (chatUnlockAt !== unlockAt) return@launch
+                chatUnlockAt = null
+                stateFlow.update { it.copy(chatLocked = false) }
+            }
+        }
+    }
 
     public suspend fun deleteMessage(messageId: String): LiveResult<Unit> =
         command { Command.DeleteMessage(it, messageId) }
@@ -200,9 +267,43 @@ public class Live internal constructor(
     /** Bannissement définitif pour ce Live ; un Co-hôte n'est bannissable que par l'Hôte. */
     public suspend fun ban(participantId: String): LiveResult<Unit> = command { Command.Ban(it, participantId) }
 
-    /** Envoie une Réaction, sans accusé de réception ; ignorée hors connexion. */
+    /**
+     * Envoie une Réaction, sans accusé de réception, et l'anime aussitôt ([LiveEvent.ReactionsReceived]).
+     * Ignorée hors connexion ou si [emoji] n'est pas dans `config.reactions`.
+     */
     public fun react(emoji: String) {
-        activeSocket?.send(Wire.encodeClientMessage(ClientMessage.React(emoji)))
+        if (emoji !in config.value.reactions) return
+        val socket = activeSocket ?: return
+        socket.send(Wire.encodeClientMessage(ClientMessage.React(emoji)))
+        synchronized(ownReactionsLock) { ownSinceLastWindow.merge(emoji, 1, Int::plus) }
+        eventFlow.tryEmit(LiveEvent.ReactionsReceived(mapOf(emoji to 1)))
+    }
+
+    /**
+     * Retire de [counts] ses propres Réactions déjà animées. Une Réaction envoyée en fin de fenêtre
+     * peut n'arriver que dans la suivante : celles qui manquent sont reportées une fois, puis oubliées
+     * (Réaction perdue, ou ignorée par le serveur).
+     */
+    private fun withoutOwnReactions(counts: Map<String, Int>): Map<String, Int> = synchronized(ownReactionsLock) {
+        val remaining = counts.toMutableMap()
+        fun subtract(own: MutableMap<String, Int>) {
+            own.entries.removeAll { entry ->
+                val taken = minOf(entry.value, remaining[entry.key] ?: 0)
+                remaining[entry.key] = (remaining[entry.key] ?: 0) - taken
+                entry.setValue(entry.value - taken)
+                entry.value == 0
+            }
+        }
+        subtract(ownCarried)
+        subtract(ownSinceLastWindow)
+        ownCarried = ownSinceLastWindow
+        ownSinceLastWindow = mutableMapOf()
+        remaining.filterValues { it > 0 }
+    }
+
+    private fun forgetOwnReactions() = synchronized(ownReactionsLock) {
+        ownSinceLastWindow.clear()
+        ownCarried.clear()
     }
 
     private suspend fun command(build: (ref: String) -> Command): LiveResult<Unit> {
@@ -268,7 +369,9 @@ public class Live internal constructor(
                         caughtUp = true
                         @OptIn(InternalLiveSdkApi::class)
                         mediaFlow.value = MediaAccess(message.livekit.url, message.livekit.token)
-                        stateFlow.value = LiveState(LiveState.Connection.Connected, message.toDetails())
+                        val details = message.toDetails()
+                        forgetOwnReactions() // fenêtres manquées pendant la coupure
+                        stateFlow.update { it.copy(connection = LiveState.Connection.Connected, live = details) }
                         activeSocket = socket
                     }
                     is ServerMessage.Ack -> pending[message.ref]?.complete(LiveResult.Success(Unit))
@@ -318,7 +421,9 @@ public class Live internal constructor(
     /** Applique un événement incrémental à l'état exposé. */
     private fun apply(message: ServerMessage) {
         when (message) {
-            is ServerMessage.Reactions -> eventFlow.tryEmit(LiveEvent.ReactionsReceived(message.counts))
+            is ServerMessage.Reactions -> withoutOwnReactions(message.counts)
+                .takeIf { it.isNotEmpty() }
+                ?.let { eventFlow.tryEmit(LiveEvent.ReactionsReceived(it)) }
             is ServerMessage.ChatMessageReceived -> (message.message as? ChatMessage.Purchase)
                 ?.let { eventFlow.tryEmit(LiveEvent.PurchaseAnnounced(it)) }
             else -> Unit
@@ -380,6 +485,9 @@ public class Live internal constructor(
     private companion object {
         val COMMAND_TIMEOUT = 10.seconds
         const val MAX_MESSAGES = 200
+
+        /** Verrou du chat si un `rate_limited` arrive sans `retryAfterMs`. */
+        const val DEFAULT_CHAT_LOCK_MS = 5_000L
         const val MAX_BACKOFF_MS = 10_000L
         val FATAL_JOIN_ERRORS = setOf(LiveErrorCode.LiveNotFound, LiveErrorCode.Banned, LiveErrorCode.NotFound)
 

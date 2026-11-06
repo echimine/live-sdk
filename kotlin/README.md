@@ -35,7 +35,12 @@ LiveSdk.configure(
 | --- | --- |
 | `LiveListScreen(onOpenLive, onLaunch)` | Lives en cours de toutes les App membres (titre, Hôte, App d'origine, Audience) + champ de lien direct |
 | `LiveLaunchScreen(onLaunched, onClose)` | Aperçu caméra, vérifications (caméra, micro, serveur), titre facultatif ≤ 80, « Lancer » |
-| `LiveScreen(liveId, onClose)` / `LiveScreen(live, onClose)` | Le Live en plein écran : vidéo, barre du haut (libellé du Live, ✕), dock |
+| `LiveScreen(liveId, onClose)` / `LiveScreen(live, onClose)` | Le Live en plein écran : vidéo, barre du haut (libellé du Live, ✕), 2 derniers messages, dock (💬 chat en feuille mi-hauteur, ❤️ Réaction rapide / appui long, 😀 toutes les Réactions), Réactions de tous en animation |
+
+Sans les écrans, le cœur suffit : `live.sendMessage(text)` refuse un message vide ou trop long
+(`InvalidMessage`) sans rien envoyer, et verrouille le chat après un `rate_limited`
+(`live.state.value.chatLocked`, le temps indiqué) ; `live.react(emoji)` n'envoie qu'un emoji de
+`live.config.value.reactions` et l'anime aussitôt via `live.events`.
 
 La navigation reste à votre app : chaque écran rend la main par ses callbacks.
 `liveIdFrom(text)` extrait l'identifiant d'un lien collé, pour brancher vos propres liens.
