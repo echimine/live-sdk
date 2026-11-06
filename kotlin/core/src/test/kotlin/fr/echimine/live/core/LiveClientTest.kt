@@ -203,6 +203,23 @@ class LiveClientTest {
     }
 
     @Test
+    fun relancerAlorsQuUnLiveEstEnCoursRendCeLive() = runTest {
+        val client = configure()
+        val enCours = fixture("http/lives.create.response.json").replace("lv_8f3k2m", "lv_en_cours")
+        transport.http = { request ->
+            if (request.method == "POST") HttpResponse(200, emptyMap(), enCours) // 200 : Live déjà en cours
+            else HttpResponse(200, emptyMap(), fixture("config.json"))
+        }
+
+        val live = (client.startLive("Nouveau titre") as LiveResult.Success).value
+        runCurrent()
+
+        assertEquals("lv_en_cours", live.id)
+        assertEquals("wss://live.example/v1/lives/lv_en_cours/ws", transport.connectedUrls.single())
+        client.close()
+    }
+
+    @Test
     fun lancerUnLiveSansTitreNEnvoiePasDeTitre() = runTest {
         val client = configure()
         client.startLive()

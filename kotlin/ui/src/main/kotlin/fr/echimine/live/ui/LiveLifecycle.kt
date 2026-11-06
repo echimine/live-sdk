@@ -6,7 +6,6 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -16,13 +15,13 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.SheetValue
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -37,62 +36,16 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import fr.echimine.live.core.Audience
 import fr.echimine.live.core.Live
 import fr.echimine.live.core.LiveEndSummary
 import fr.echimine.live.core.LiveResult
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import java.text.NumberFormat
 import kotlin.time.Duration.Companion.seconds
-
-/** L'Audience dans la barre du haut : « 👁 38 », un tap ouvre le détail par App d'origine. */
-@Composable
-internal fun AudienceChip(audience: Audience, onClick: () -> Unit) {
-    val total = formatCount(audience.total)
-    Text(
-        "👁 $total",
-        color = Color.White,
-        fontWeight = FontWeight.SemiBold,
-        fontSize = 13.sp,
-        modifier = Modifier
-            .clip(CircleShape)
-            .background(Color.Black.copy(alpha = 0.35f))
-            .clickable(onClickLabel = "Voir l'Audience par App d'origine", onClick = onClick)
-            .semantics { contentDescription = "Audience : $total Spectateurs" }
-            .padding(horizontal = 10.dp, vertical = 6.dp),
-    )
-}
-
-/** L'Audience détaillée par App d'origine, de la plus présente à la moins présente. */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-internal fun AudienceSheet(audience: Audience, onDismiss: () -> Unit) {
-    ModalBottomSheet(onDismissRequest = onDismiss) {
-        Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 24.dp)) {
-            Text("Audience", style = MaterialTheme.typography.titleMedium)
-            Text(
-                "${formatCount(audience.total)} ${if (audience.total > 1) "Spectateurs" else "Spectateur"}",
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Spacer(Modifier.height(12.dp))
-            if (audience.ranked.isEmpty()) {
-                Text("Aucun Spectateur pour l'instant.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            audience.ranked.forEach { (app, count) ->
-                Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text(app, Modifier.weight(1f))
-                    Text(formatCount(count), fontWeight = FontWeight.SemiBold)
-                }
-            }
-        }
-    }
-}
 
 /**
  * Bandeaux de présence de l'Hôte, pour les autres Participants : « Hôte déconnecté » pendant son
@@ -109,17 +62,19 @@ internal fun HostPresenceBanner(hostConnected: Boolean, modifier: Modifier = Mod
         } else if (wasDisconnected) {
             wasDisconnected = false
             showReturn = true
-            delay(RETURN_BANNER)
+            delay(HOST_RETURNED_BANNER_DURATION)
             showReturn = false
         }
     }
     val text = when {
         !hostConnected -> "Hôte déconnecté · en attente de son retour…"
-        showReturn -> "Hôte revenu"
+        showReturn -> HOST_RETURNED
         else -> null
     }
+    // Le texte (et sa couleur) reste celui du dernier bandeau pendant le fondu de sortie.
     var lastText by remember { mutableStateOf(text ?: "") }
     if (text != null) lastText = text
+    val returned = lastText == HOST_RETURNED
     AnimatedVisibility(
         visible = text != null,
         enter = fadeIn() + slideInVertically(),
@@ -132,13 +87,14 @@ internal fun HostPresenceBanner(hostConnected: Boolean, modifier: Modifier = Mod
             fontWeight = FontWeight.SemiBold,
             modifier = Modifier
                 .clip(RoundedCornerShape(LocalLiveTheme.current.cornerRadius))
-                .background(if (hostConnected) Color(0xCC1E8E3E) else Color(0xCCB3261E))
+                .background(if (returned) Color(0xCC1E8E3E) else Color(0xCCB3261E))
                 .padding(horizontal = 14.dp, vertical = 8.dp),
         )
     }
 }
 
-private val RETURN_BANNER = 3.seconds
+private const val HOST_RETURNED = "Hôte revenu"
+private val HOST_RETURNED_BANNER_DURATION = 3.seconds
 
 /** Hôte : confirme la fin du Live, pour tout le monde. */
 @Composable
@@ -160,7 +116,7 @@ internal fun EndLiveDialog(live: Live, onDismiss: () -> Unit) {
                     error = null
                     scope.launch {
                         when (val result = live.endLive()) {
-                            // La fin arrive par `liveEnded`, avec le récapitulatif.
+                            // La fin arrive ensuite dans `live.state` (`Connection.Ended`), avec le récapitulatif.
                             is LiveResult.Success -> onDismiss()
                             is LiveResult.Failure -> {
                                 error = "Le Live n'a pas pu être terminé : ${result.error.message}"
@@ -177,12 +133,18 @@ internal fun EndLiveDialog(live: Live, onDismiss: () -> Unit) {
     )
 }
 
-/** Hôte : récapitulatif de fin (Achats, Réactions, Audience), puis sortie du Live. */
+/**
+ * Hôte : récapitulatif de fin (Achats, Réactions, Audience), puis sortie du Live par « Fermer » seul :
+ * un glissement ou un toucher à côté ne doit pas le faire perdre.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun EndSummarySheet(summary: LiveEndSummary, onClose: () -> Unit) {
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    ModalBottomSheet(onDismissRequest = onClose, sheetState = sheetState) {
+    val sheetState = rememberModalBottomSheetState(
+        skipPartiallyExpanded = true,
+        confirmValueChange = { it != SheetValue.Hidden },
+    )
+    ModalBottomSheet(onDismissRequest = {}, sheetState = sheetState) {
         Column(
             Modifier.fillMaxWidth().padding(horizontal = 16.dp).navigationBarsPadding().padding(bottom = 16.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
@@ -212,6 +174,3 @@ private fun SummaryStat(symbol: String, value: Int, label: String) {
         Text(label, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
     }
 }
-
-/** Nombre formaté selon la locale du téléphone (« 1 284 »). */
-private fun formatCount(value: Int): String = NumberFormat.getIntegerInstance().format(value)

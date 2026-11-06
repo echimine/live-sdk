@@ -52,7 +52,6 @@ import fr.echimine.live.core.LiveSdk
 import fr.echimine.live.core.LiveState
 import fr.echimine.live.core.LiveState.Connection
 import fr.echimine.live.core.Participant
-import fr.echimine.live.core.Role
 
 /**
  * Ouvre le Live [liveId] et l'affiche en plein écran ; le quitte quand l'écran disparaît.
@@ -102,7 +101,8 @@ public fun LiveScreen(
     var audienceOpen by rememberSaveable(live.id) { mutableStateOf(false) }
     var endOpen by rememberSaveable(live.id) { mutableStateOf(false) }
     // L'Hôte termine son Live en le quittant ; les autres le quittent simplement.
-    val onQuit = { if (hostIsYou && interactive) endOpen = true else onClose() }
+    val hosting = hostIsYou && interactive
+    val onQuit = { if (hosting) endOpen = true else onClose() }
     val floating = remember(live) { FloatingReactions() }
     LaunchedEffect(live) {
         live.events.collect { event -> if (event is LiveEvent.ReactionsReceived) floating.launch(event.counts) }
@@ -113,9 +113,10 @@ public fun LiveScreen(
             VideoTrackView(room, camera, mirror = hostIsYou, modifier = Modifier.fillMaxSize())
             Scrims()
             Column(Modifier.fillMaxSize().safeDrawingPadding()) {
-                TopBar(state, onQuit, onOpenAudience = { audienceOpen = true })
+                TopBar(state, hosting, onQuit, onOpenAudience = { audienceOpen = true })
                 Box(Modifier.weight(1f).fillMaxWidth(), Alignment.Center) {
-                    if (interactive && !hostIsYou) {
+                    // Sa propre reconnexion passe d'abord : l'état de l'Hôte attend le prochain `snapshot`.
+                    if (interactive && !hostIsYou && state.connection == Connection.Connected) {
                         HostPresenceBanner(details.hostConnected, Modifier.align(Alignment.TopCenter).padding(top = 8.dp))
                     }
                     StatusOverlay(state, hasVideo = camera != null, onClose = onClose)
@@ -196,7 +197,7 @@ private fun Scrims() {
 }
 
 @Composable
-private fun TopBar(state: LiveState, onClose: () -> Unit, onOpenAudience: () -> Unit) {
+private fun TopBar(state: LiveState, hosting: Boolean, onClose: () -> Unit, onOpenAudience: () -> Unit) {
     val theme = LocalLiveTheme.current
     val details = state.live
     Row(
@@ -239,7 +240,6 @@ private fun TopBar(state: LiveState, onClose: () -> Unit, onOpenAudience: () -> 
         } else {
             Spacer(Modifier.weight(1f))
         }
-        val hosting = details != null && details.role == Role.Host && !state.connection.isFinal
         CloseButton(if (hosting) "Terminer le Live" else "Quitter le Live", onClose)
     }
 }
