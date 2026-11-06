@@ -24,7 +24,7 @@ await LiveSDK.shared.configure(serverURL: URL(string: "https://live.echimine.fr"
 | --- | --- |
 | `LiveListScreen(onOpenLive:onLaunch:)` | Lives en cours de toutes les App membres (titre, Hôte, App d'origine, Audience) + champ de lien direct |
 | `LiveLaunchScreen(onLaunched:onClose:)` | Aperçu caméra, vérifications (caméra, micro, serveur), titre facultatif ≤ 80, « Lancer » |
-| `LiveScreen(liveId:onClose:)` / `LiveScreen(session:onClose:)` | Le Live en plein écran : vidéo de l'Hôte, barre du haut (libellé du Live, ✕), dock |
+| `LiveScreen(liveId:onClose:)` / `LiveScreen(session:onClose:)` | Le Live en plein écran : vidéo de l'Hôte, barre du haut (libellé du Live, ✕), 2 derniers messages, dock (💬 chat en feuille mi-hauteur, ❤️ Réaction rapide / appui long, 😀 toutes les Réactions), Réactions de tous en animation |
 
 La navigation reste à votre app : chaque écran rend la main par ses callbacks.
 `LiveLink.liveId(from:)` extrait l'identifiant d'un lien collé, pour brancher vos propres liens.
@@ -32,6 +32,10 @@ La navigation reste à votre app : chaque écran rend la main par ses callbacks.
 Sans les écrans, le cœur suffit : `try await LiveSDK.shared.openLive(id:)` rend une `LiveSession`
 observable (`status`, `role`, `host`, `audience`, `messages`…) et `session.send(_:)` envoie une
 commande typée (succès sur `ack`, sinon `LiveCommandError` à code fermé).
+`session.sendMessage(_:)` refuse un message vide ou trop long (`invalid_message`) sans rien envoyer,
+et verrouille le chat après un `rate_limited` (`session.chatLocked`, le temps indiqué) ;
+`session.react(_:)` n'envoie qu'un emoji de `session.config.reactions` et l'anime aussitôt via
+`session.events()`.
 
 ## Thème
 

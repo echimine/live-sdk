@@ -76,10 +76,13 @@ private struct LiveStage: View {
     let session: LiveSession
     let onClose: () -> Void
     @Environment(\.liveTheme) private var theme
+    @State private var chatOpen = false
+    @State private var reactionsOpen = false
 
     var body: some View {
         ZStack {
             HostVideo(session: session).ignoresSafeArea()
+            ReactionsOverlay(session: session)
             if let notice = statusNotice {
                 Text(notice)
                     .font(theme.font(15, weight: .semibold))
@@ -88,12 +91,23 @@ private struct LiveStage: View {
                     .padding(.vertical, 10)
                     .background(.black.opacity(0.6), in: RoundedRectangle(cornerRadius: theme.cornerRadius))
             }
-            VStack {
+            VStack(spacing: 12) {
                 topBar
                 Spacer()
+                RecentMessages(messages: session.messages)
                 dock
             }
             .padding(16)
+        }
+        .sheet(isPresented: $chatOpen) {
+            ChatSheet(session: session)
+                .presentationDetents([.medium, .large])
+                .liveTheme(theme)
+        }
+        .sheet(isPresented: $reactionsOpen) {
+            ReactionsSheet(session: session)
+                .presentationDetents([.medium])
+                .liveTheme(theme)
         }
         .background(Color.black)
         .font(theme.font(16))
@@ -119,8 +133,22 @@ private struct LiveStage: View {
     }
 
     private var dock: some View {
-        HStack(spacing: 12) {}
-            .frame(maxWidth: .infinity, minHeight: 48)
+        HStack(spacing: 12) {
+            DockButton(symbol: "💬", label: "Ouvrir le chat") { chatOpen = true }
+            Spacer()
+            Group {
+                if let quick = session.config.reactions.first {
+                    QuickReactionButton(emoji: quick) {
+                        session.react(quick)
+                    } onLongPress: {
+                        reactionsOpen = true
+                    }
+                }
+                DockButton(symbol: "😀", label: "Toutes les Réactions") { reactionsOpen = true }
+            }
+            .disabled(session.status != .connected)
+        }
+        .frame(maxWidth: .infinity, minHeight: 48)
     }
 
     private var statusNotice: String? {
@@ -135,5 +163,44 @@ private struct LiveStage: View {
         case .failed: "Impossible de rejoindre ce Live."
         case .left: nil
         }
+    }
+}
+
+private struct DockButton: View {
+    let symbol: String
+    let label: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Text(symbol)
+                .font(.system(size: 24))
+                .frame(width: 48, height: 48)
+                .background(.black.opacity(0.45), in: Circle())
+        }
+        .accessibilityLabel(label)
+    }
+}
+
+private struct QuickReactionButton: View {
+    let emoji: String
+    let onTap: () -> Void
+    let onLongPress: () -> Void
+    @Environment(\.isEnabled) private var isEnabled
+
+    var body: some View {
+        Text(emoji)
+            .font(.system(size: 24))
+            .frame(width: 48, height: 48)
+            .background(.black.opacity(0.45), in: Circle())
+            .opacity(isEnabled ? 1 : 0.5)
+            .contentShape(Circle())
+            .onTapGesture { if isEnabled { onTap() } }
+            .onLongPressGesture(minimumDuration: 0.4) { if isEnabled { onLongPress() } }
+            .accessibilityElement()
+            .accessibilityLabel("Réagir \(emoji)")
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction { if isEnabled { onTap() } }
+            .accessibilityAction(named: "Toutes les Réactions") { if isEnabled { onLongPress() } }
     }
 }

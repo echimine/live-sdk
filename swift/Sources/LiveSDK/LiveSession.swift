@@ -20,6 +20,10 @@ public enum LiveStatus: Sendable, Hashable {
     }
 }
 
+public enum LiveEvent: Sendable, Hashable {
+    case reactions([String: Int])
+}
+
 @MainActor
 @Observable
 public final class LiveSession {
@@ -38,6 +42,7 @@ public final class LiveSession {
     public private(set) var messages: [ChatMessage] = []
     public private(set) var joinRequests: [Participant] = []
     public private(set) var moderation: Moderation?
+    public private(set) var chatLocked = false
 
     private let url: URL
     private let tokenProvider: TokenProvider
@@ -48,12 +53,20 @@ public final class LiveSession {
     private var failures = 0
     private var mediaConnected = false
     private var mediaPublished = false
+    private var eventContinuations: [UUID: AsyncStream<LiveEvent>.Continuation] = [:]
+    private var ownReactionsSinceLastWindow: [String: Int] = [:]
+    private var ownReactionsCarried: [String: Int] = [:]
+    private var chatUnlockAt: Date?
+    private var chatUnlockTask: Task<Void, Never>?
     private let media: any MediaConnector
     private var outbox: Task<Void, Never>?
     private var pending: [String: CheckedContinuation<Result<Void, LiveCommandError>, Never>] = [:]
 
-    init(id: String, url: URL, tokenProvider: @escaping TokenProvider, environment: LiveSDKEnvironment) {
+    public let config: LiveConfig
+
+    init(id: String, url: URL, config: LiveConfig, tokenProvider: @escaping TokenProvider, environment: LiveSDKEnvironment) {
         self.id = id
+        self.config = config
         self.url = url
         self.tokenProvider = tokenProvider
         self.environment = environment
@@ -74,6 +87,48 @@ public final class LiveSession {
         await finish(.left)
     }
 
+    public func sendMessage(_ text: String) async throws(LiveCommandError) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let maxLength = config.chat.maxLength
+        guard (1...maxLength).contains(trimmed.count) else {
+            throw LiveCommandError(code: .invalidMessage, message: "Un message fait de 1 à \(maxLength) caractères visibles.")
+        }
+        if let remaining = chatLockRemaining {
+            throw LiveCommandError(code: .rateLimited, message: "Doucement…", retryAfter: remaining)
+        }
+        do {
+            try await send(.sendMessage(text: trimmed))
+        } catch {
+            if error.code == .rateLimited {
+                lockChat(for: error.retryAfter ?? Self.defaultChatLock)
+            }
+            throw error
+        }
+    }
+
+    private static let defaultChatLock = Duration.seconds(5)
+
+    private var chatLockRemaining: Duration? {
+        guard let chatUnlockAt else { return nil }
+        let milliseconds = Int((chatUnlockAt.timeIntervalSince(environment.clock.now) * 1000).rounded())
+        return milliseconds > 0 ? .milliseconds(milliseconds) : nil
+    }
+
+    private func lockChat(for duration: Duration) {
+        let unlockAt = environment.clock.now.addingTimeInterval(duration.timeInterval)
+        if let current = chatUnlockAt, current >= unlockAt { return }
+        chatUnlockAt = unlockAt
+        chatLocked = true
+        chatUnlockTask?.cancel()
+        let clock = environment.clock
+        chatUnlockTask = Task { [weak self] in
+            try? await clock.sleep(for: duration)
+            guard let self, self.chatUnlockAt == unlockAt else { return }
+            self.chatUnlockAt = nil
+            self.chatLocked = false
+        }
+    }
+
     public func send(_ command: LiveCommand) async throws(LiveCommandError) {
         let ref = nextRef()
         guard status == .connected, let connection, let text = try? Self.encode(.command(ref: ref, command)) else {
@@ -81,17 +136,72 @@ public final class LiveSession {
         }
         let result = await withCheckedContinuation { continuation in
             pending[ref] = continuation
-            let previous = outbox
-            outbox = Task { [weak self] in
-                await previous?.value
-                do {
-                    try await connection.send(text)
-                } catch {
-                    self?.resolve(ref, with: .failure(LiveCommandError(code: .disconnected, message: "")))
-                }
+            enqueue(text, on: connection) { [weak self] in
+                self?.resolve(ref, with: .failure(LiveCommandError(code: .disconnected, message: "")))
             }
         }
         try result.get()
+    }
+
+    public func react(_ emoji: String) {
+        guard config.reactions.contains(emoji), status == .connected, let connection,
+              let text = try? Self.encode(.react(emoji: emoji))
+        else { return }
+        enqueue(text, on: connection) { [weak self] in
+            self?.forgetOwnReaction(emoji)
+        }
+        ownReactionsSinceLastWindow[emoji, default: 0] += 1
+        emit(.reactions([emoji: 1]))
+    }
+
+    private func forgetOwnReaction(_ emoji: String) {
+        guard let count = ownReactionsSinceLastWindow[emoji] else { return }
+        ownReactionsSinceLastWindow[emoji] = count > 1 ? count - 1 : nil
+    }
+
+    public func events() -> AsyncStream<LiveEvent> {
+        let (stream, continuation) = AsyncStream<LiveEvent>.makeStream(bufferingPolicy: .bufferingNewest(64))
+        guard !status.isFinal else {
+            continuation.finish()
+            return stream
+        }
+        let key = UUID()
+        eventContinuations[key] = continuation
+        continuation.onTermination = { [weak self] _ in
+            Task { @MainActor in self?.eventContinuations[key] = nil }
+        }
+        return stream
+    }
+
+    private func emit(_ event: LiveEvent) {
+        eventContinuations.values.forEach { $0.yield(event) }
+    }
+
+    private func enqueue(_ text: String, on connection: any WebSocketConnection, onFailure: @escaping @MainActor () -> Void) {
+        let previous = outbox
+        outbox = Task {
+            await previous?.value
+            do {
+                try await connection.send(text)
+            } catch {
+                onFailure()
+            }
+        }
+    }
+
+    private func withoutOwnReactions(_ counts: [String: Int]) -> [String: Int] {
+        var remaining = counts
+        func subtract(_ own: [String: Int]) -> [String: Int] {
+            own.reduce(into: [String: Int]()) { left, entry in
+                let taken = min(entry.value, remaining[entry.key] ?? 0)
+                remaining[entry.key] = (remaining[entry.key] ?? 0) - taken
+                if entry.value > taken { left[entry.key] = entry.value - taken }
+            }
+        }
+        _ = subtract(ownReactionsCarried)
+        ownReactionsCarried = subtract(ownReactionsSinceLastWindow)
+        ownReactionsSinceLastWindow = [:]
+        return remaining.filter { $0.value > 0 }
     }
 
     private func resolve(_ ref: String, with result: Result<Void, LiveCommandError>) {
@@ -151,6 +261,8 @@ public final class LiveSession {
         connection?.close()
         connection = nil
         status = .reconnecting
+        ownReactionsSinceLastWindow = [:]
+        ownReactionsCarried = [:]
         failPendingCommands()
     }
 
@@ -198,6 +310,8 @@ public final class LiveSession {
             pinnedProduct = nil
         case .reactions(let update):
             reactionsTotal = update.total
+            let others = withoutOwnReactions(update.counts)
+            if !others.isEmpty { emit(.reactions(others)) }
         case .hostDisconnected:
             hostConnected = false
         case .hostReconnected:
@@ -247,6 +361,9 @@ public final class LiveSession {
     private func finish(_ final: LiveStatus) async {
         status = final
         failPendingCommands()
+        chatUnlockTask?.cancel()
+        eventContinuations.values.forEach { $0.finish() }
+        eventContinuations = [:]
         connection?.close()
         connection = nil
         await media.disconnect()
@@ -274,5 +391,11 @@ public final class LiveSession {
         messages = snapshot.messages
         joinRequests = snapshot.joinRequests ?? []
         moderation = snapshot.moderation
+    }
+}
+
+extension Duration {
+    var timeInterval: TimeInterval {
+        Double(components.seconds) + Double(components.attoseconds) / 1e18
     }
 }
