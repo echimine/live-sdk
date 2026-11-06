@@ -3,7 +3,9 @@ import type { ChatStore } from "./chat-store.js";
 import type { Clock, Timer } from "./clock.js";
 import type { LivekitPort } from "./livekit.js";
 import { SlidingWindow } from "./rate-limit.js";
+import { newProductId, type ProductStore, type PurchaseMessage } from "./product-store.js";
 import { LiveReactions } from "./reactions.js";
+import { LiveShop, productInput } from "./shop.js";
 import { LiveStage, MAX_COHOSTS } from "./stage.js";
 import { type EndReason, type Live, type LiveStore, newLiveId } from "./live-store.js";
 import type { ChatMessage, Config, ErrorCode, LiveSummary, Participant, Role, ServerMessage } from "./protocol/index.js";
@@ -69,6 +71,8 @@ interface RunningLive {
   stage: LiveStage;
   /** Délais de grâce des Co-hôtes déconnectés. */
   cohostGrace: Map<string, Timer>;
+  /** Produit épinglé et Achats. */
+  shop: LiveShop;
 }
 
 /** Un Live en cours vu par `GET /admin/state`. */
@@ -92,10 +96,16 @@ export type CommandResult =
 const liveNotFound = { ok: false, code: "live_not_found", message: "Ce Live n'existe pas ou est terminé." } as const;
 const notHost = { ok: false, code: "not_host", message: "Seul l'Hôte peut faire cela." } as const;
 const noJoinRequest = { ok: false, code: "not_found", message: "Aucune Demande de montée de ce Participant." } as const;
+const notAnimatorForProduct = {
+  ok: false,
+  code: "not_animator",
+  message: "Seuls les Animateurs peuvent épingler ou retirer un produit.",
+} as const;
 
 export interface LivesDeps {
   store: LiveStore;
   chat: ChatStore;
+  products: ProductStore;
   livekit: LivekitPort;
   clock: Clock;
   log: Logger;
@@ -116,6 +126,7 @@ export class Lives {
 
   private readonly store: LiveStore;
   private readonly chat: ChatStore;
+  private readonly products: ProductStore;
   private readonly livekit: LivekitPort;
   private readonly clock: Clock;
   private readonly log: Logger;
@@ -124,6 +135,7 @@ export class Lives {
   constructor(deps: LivesDeps) {
     this.store = deps.store;
     this.chat = deps.chat;
+    this.products = deps.products;
     this.livekit = deps.livekit;
     this.clock = deps.clock;
     this.log = deps.log;
@@ -340,9 +352,99 @@ export class Lives {
     }
     // Le Live a pu se terminer pendant l'écriture : le message est conservé, sans diffusion.
     if (state.ending || this.running.get(state.live.id) !== state) return liveNotFound;
+    this.announce(state, message, accepted);
+    return { ok: true };
+  }
+
+  /** `onAccepted`, puis le message rejoint les derniers messages et part dans le chat de tous. */
+  private announce(state: RunningLive, message: ChatMessage, onAccepted: () => void): void {
     state.recentMessages = [...state.recentMessages, message].slice(-SNAPSHOT_MESSAGES);
-    accepted();
+    onAccepted();
     broadcast(state, { type: "chatMessage", message });
+  }
+
+  /**
+   * Un Animateur épingle un produit, à la place du précédent : enregistré, `ack`
+   * (via `accepted`), puis `productPinned` à tous. `invalid_product` s'il est invalide.
+   */
+  async pinProduct(presence: Presence, candidate: unknown, accepted: () => void): Promise<CommandResult> {
+    if (presence.role === "viewer") return notAnimatorForProduct;
+    const state = this.runningFor(presence);
+    if (!state) return liveNotFound;
+    const max = this.config.product.nameMaxLength;
+    const input = productInput(candidate, max);
+    if (!input) {
+      return {
+        ok: false,
+        code: "invalid_product",
+        message: `Produit invalide : nom de 1 à ${max} caractères, prix de 0 à 1 000 000 centimes, devise ISO 4217 en majuscules, image en https.`,
+      };
+    }
+    const product = { id: newProductId(), ...input };
+    return state.shop.exclusive(async () => {
+      await this.products.pin(state.live.id, product, this.clock.now());
+      // Le Live a pu se terminer pendant l'écriture : le produit est conservé, sans diffusion.
+      if (state.ending || this.running.get(state.live.id) !== state) return liveNotFound;
+      state.shop.pinned = product;
+      accepted();
+      broadcast(state, { type: "productPinned", product });
+      return { ok: true };
+    });
+  }
+
+  /** Un Animateur retire le Produit épinglé : `ack`, puis `productUnpinned` à tous s'il y en avait un. */
+  async unpinProduct(presence: Presence, accepted: () => void): Promise<CommandResult> {
+    if (presence.role === "viewer") return notAnimatorForProduct;
+    const state = this.runningFor(presence);
+    if (!state) return liveNotFound;
+    return state.shop.exclusive(async () => {
+      const unpinned = await this.products.unpin(state.live.id, this.clock.now());
+      if (state.ending || this.running.get(state.live.id) !== state) return liveNotFound;
+      state.shop.pinned = undefined;
+      accepted();
+      if (unpinned) broadcast(state, { type: "productUnpinned" });
+      return { ok: true };
+    });
+  }
+
+  /**
+   * Un Participant achète le Produit épinglé (Achat simulé) : enregistré, `ack`, puis
+   * Annonce d'achat dans le chat de tous. `product_changed` si `productId` n'est plus
+   * le Produit épinglé ; un Achat par seconde au plus.
+   */
+  async purchase(presence: Presence, productId: string, accepted: () => void): Promise<CommandResult> {
+    const state = this.runningFor(presence);
+    if (!state) return liveNotFound;
+    const product = state.shop.pinned;
+    if (product?.id !== productId) {
+      return { ok: false, code: "product_changed", message: "Le Produit épinglé a changé entre-temps." };
+    }
+    const buyer = presence.participant.id;
+    const at = this.clock.now();
+    const retryAfterMs = state.shop.takePurchase(buyer, at);
+    if (retryAfterMs !== undefined) {
+      return { ok: false, code: "rate_limited", message: "Un Achat par seconde au plus.", retryAfterMs };
+    }
+    const { id, name, price, currency } = product;
+    const message = {
+      id: newMessageId(),
+      kind: "purchase",
+      author: presence.participant,
+      role: presence.role,
+      product: { id, name, price, currency },
+      at: at.toISOString(),
+    } satisfies PurchaseMessage;
+    try {
+      await this.products.recordPurchase(state.live.id, message);
+    } catch (error) {
+      // Achat perdu : il ne compte pas dans la limite.
+      state.shop.giveBackPurchase(buyer, at);
+      throw error;
+    }
+    state.shop.purchases++;
+    // Le Live a pu se terminer pendant l'écriture : l'Achat est conservé, sans annonce.
+    if (state.ending || this.running.get(state.live.id) !== state) return liveNotFound;
+    this.announce(state, message, accepted);
     return { ok: true };
   }
 
@@ -594,7 +696,11 @@ export class Lives {
           ? {
               type: "liveEnded",
               reason,
-              summary: { purchases: 0, reactions: state.reactions.total, peakAudience: state.peakAudience },
+              summary: {
+                purchases: state.shop.purchases,
+                reactions: state.reactions.total,
+                peakAudience: state.peakAudience,
+              },
             }
           : { type: "liveEnded", reason },
       );
@@ -627,8 +733,10 @@ export class Lives {
         this.store.findRunning(liveId),
         this.chat.recent(liveId, SNAPSHOT_MESSAGES),
         this.store.listCohosts(liveId),
+        this.products.findPinned(liveId),
+        this.products.countPurchases(liveId),
       ])
-        .then(([live, recentMessages, cohosts]) => {
+        .then(([live, recentMessages, cohosts, pinned, purchases]) => {
           if (!live) return undefined;
           const loaded: RunningLive = {
             live,
@@ -643,6 +751,7 @@ export class Lives {
             reactions: this.liveReactions(live),
             stage: new LiveStage(cohosts),
             cohostGrace: new Map(),
+            shop: new LiveShop(pinned, purchases),
           };
           this.running.set(liveId, loaded);
           // Aucun Animateur n'est encore là (lancement, redémarrage) : leur Délai de grâce court dès maintenant.
@@ -667,6 +776,7 @@ export class Lives {
       host: live.host,
       hostConnected: state.present.has(live.host.id),
       cohosts: state.stage.cohosts,
+      ...(state.shop.pinned && { pinnedProduct: state.shop.pinned }),
       audience: audienceOf(state),
       reactionsTotal: state.reactions.total,
       messages: state.recentMessages,

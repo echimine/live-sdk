@@ -1,16 +1,17 @@
 import { and, desc, eq, isNull } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import { postgresCode } from "./db/postgres-error.js";
-import { chatMessages } from "./db/schema.js";
+import { chatMessages, products } from "./db/schema.js";
 import type { ChatMessage } from "./protocol/index.js";
 
 type Row = typeof chatMessages.$inferSelect;
+type ProductRow = typeof products.$inferSelect;
 type TextMessage = Extract<ChatMessage, { kind: "text" }>;
 
-function toMessage(row: Row): TextMessage {
-  return {
+/** Message tel qu'il part sur le fil ; une Annonce d'achat reprend le produit acheté. */
+function toMessage(row: Row, product: ProductRow | null): ChatMessage | undefined {
+  const base = {
     id: row.id,
-    kind: row.kind,
     author: {
       id: row.authorId,
       app: row.authorApp,
@@ -18,9 +19,14 @@ function toMessage(row: Row): TextMessage {
       ...(row.authorPicture !== null && { picture: row.authorPicture }),
     },
     role: row.authorRole,
-    text: row.text,
     at: row.sentAt.toISOString(),
   };
+  if (row.kind === "purchase") {
+    if (product === null) return undefined;
+    const { id, name, price, currency } = product;
+    return { ...base, kind: "purchase", product: { id, name, price, currency } };
+  }
+  return row.text === null ? undefined : { ...base, kind: "text", text: row.text };
 }
 
 /**
@@ -67,14 +73,18 @@ export class ChatStore {
     return rows.length > 0;
   }
 
-  /** Les `limit` derniers messages non supprimés d'un Live, du plus ancien au plus récent. */
-  async recent(liveId: string, limit: number): Promise<TextMessage[]> {
+  /**
+   * Les `limit` derniers messages non supprimés d'un Live, Annonces d'achat
+   * comprises, du plus ancien au plus récent.
+   */
+  async recent(liveId: string, limit: number): Promise<ChatMessage[]> {
     const rows = await this.db
-      .select()
+      .select({ message: chatMessages, product: products })
       .from(chatMessages)
+      .leftJoin(products, eq(chatMessages.productId, products.id))
       .where(and(eq(chatMessages.liveId, liveId), isNull(chatMessages.deletedAt)))
       .orderBy(desc(chatMessages.seq))
       .limit(limit);
-    return rows.reverse().map(toMessage);
+    return rows.reverse().flatMap(({ message, product }) => toMessage(message, product) ?? []);
   }
 }

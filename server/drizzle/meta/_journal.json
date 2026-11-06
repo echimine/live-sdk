@@ -29,6 +29,13 @@
       "when": 1793965478659,
       "tag": "0003_live_cohosts",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1793968069323,
+      "tag": "0004_products_purchases",
+      "breakpoints": true
     }
   ]
 }

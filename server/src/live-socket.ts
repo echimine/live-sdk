@@ -58,7 +58,7 @@ interface Limits {
 }
 
 /** Messages qui ne consomment pas le quota des commandes. */
-const ownLimitTypes = new Set(["join", "react", "sendMessage"]);
+const ownLimitTypes = new Set(["join", "react", "sendMessage", "purchase"]);
 
 interface Deps extends Omit<LiveSocketOptions, "trustProxy"> {
   log: FastifyBaseLogger;
@@ -267,8 +267,13 @@ class LiveSocket implements Connection {
       }
     }
 
+    const { lives } = this.deps;
     const parsed = ClientMessage.safeParse(raw);
     if (!parsed.success) {
+      // Produit invalide : `invalid_product` (ou `not_animator`), décidé par le Live.
+      if (type === "pinProduct" && ref !== undefined) {
+        return this.run(ref, (accepted) => lives.pinProduct(presence, raw, accepted));
+      }
       // Type inconnu sans `ref` : ignoré, comme le veut le protocole.
       if (typeof type !== "string" || !knownTypes.has(type)) {
         return ref === undefined ? undefined : this.reject(ref, "unknown_command", "Commande inconnue.");
@@ -277,7 +282,6 @@ class LiveSocket implements Connection {
     }
 
     const message = parsed.data;
-    const { lives } = this.deps;
     switch (message.type) {
       case "join":
         return;
@@ -301,6 +305,12 @@ class LiveSocket implements Connection {
         return this.run(message.ref, (accepted) => lives.leaveStage(presence, accepted));
       case "removeCohost":
         return this.run(message.ref, (accepted) => lives.removeCohost(presence, message.participantId, accepted));
+      case "pinProduct":
+        return this.run(message.ref, (accepted) => lives.pinProduct(presence, message, accepted));
+      case "unpinProduct":
+        return this.run(message.ref, (accepted) => lives.unpinProduct(presence, accepted));
+      case "purchase":
+        return this.run(message.ref, (accepted) => lives.purchase(presence, message.productId, accepted));
       default:
         return this.reject(message.ref, "unknown_command", "Commande pas encore prise en charge.");
     }

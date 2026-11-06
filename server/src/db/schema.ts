@@ -22,6 +22,28 @@ export const lives = pgTable(
 );
 
 /**
+ * Produits épinglés dans les Lives, conservés après leur retrait. Le Produit
+ * épinglé d'un Live est celui dont `unpinned_at` est nul : un seul à la fois.
+ */
+export const products = pgTable(
+  "products",
+  {
+    id: text("id").primaryKey(),
+    liveId: text("live_id")
+      .notNull()
+      .references(() => lives.id),
+    name: text("name").notNull(),
+    /** En centimes. */
+    price: integer("price").notNull(),
+    currency: text("currency").notNull(),
+    imageUrl: text("image_url"),
+    pinnedAt: timestamp("pinned_at", { withTimezone: true, precision: 3 }).notNull(),
+    unpinnedAt: timestamp("unpinned_at", { withTimezone: true, precision: 3 }),
+  },
+  (table) => [uniqueIndex("products_one_pinned_per_live").on(table.liveId).where(sql`${table.unpinnedAt} is null`)],
+);
+
+/**
  * Historique du chat, conservé après la fin du Live. Une suppression est marquée
  * (`deleted_at`), jamais effacée. `seq` ordonne les messages d'un même instant.
  */
@@ -38,8 +60,11 @@ export const chatMessages = pgTable(
     authorName: text("author_name").notNull(),
     authorPicture: text("author_picture"),
     authorRole: text("author_role", { enum: ["host", "cohost", "viewer"] }).notNull(),
-    kind: text("kind", { enum: ["text"] }).notNull(),
-    text: text("text").notNull(),
+    kind: text("kind", { enum: ["text", "purchase"] }).notNull(),
+    /** Texte d'un message `text` ; nul pour une Annonce d'achat. */
+    text: text("text"),
+    /** Produit acheté, pour une Annonce d'achat (`kind: purchase`). */
+    productId: text("product_id").references(() => products.id),
     sentAt: timestamp("sent_at", { withTimezone: true, precision: 3 }).notNull(),
     deletedAt: timestamp("deleted_at", { withTimezone: true, precision: 3 }),
   },
@@ -61,4 +86,29 @@ export const liveCohosts = pgTable(
     promotedAt: timestamp("promoted_at", { withTimezone: true, precision: 3 }).notNull(),
   },
   (table) => [uniqueIndex("live_cohosts_one_per_participant").on(table.liveId, table.participantId)],
+);
+
+/**
+ * Achats simulés, comptés dans le récapitulatif de fin. `id` est celui de leur
+ * Annonce d'achat dans le chat ; supprimer l'annonce ne retire pas l'Achat.
+ */
+export const purchases = pgTable(
+  "purchases",
+  {
+    seq: bigserial("seq", { mode: "number" }).primaryKey(),
+    id: text("id").notNull().unique(),
+    liveId: text("live_id")
+      .notNull()
+      .references(() => lives.id),
+    productId: text("product_id")
+      .notNull()
+      .references(() => products.id),
+    buyerId: text("buyer_id").notNull(),
+    buyerApp: text("buyer_app").notNull(),
+    buyerName: text("buyer_name").notNull(),
+    buyerPicture: text("buyer_picture"),
+    buyerRole: text("buyer_role", { enum: ["host", "cohost", "viewer"] }).notNull(),
+    purchasedAt: timestamp("purchased_at", { withTimezone: true, precision: 3 }).notNull(),
+  },
+  (table) => [index("purchases_live").on(table.liveId)],
 );
