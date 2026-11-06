@@ -52,4 +52,39 @@ struct MediaTests {
 
         #expect(await eventually { media.events.filter { $0.hasPrefix("connect") }.count == 2 })
     }
+
+    @Test func lHotePublieCameraEtMicroDesQueLaRoomEstConnectee() async throws {
+        let harness = Harness()
+        _ = try await LiveSessionTests.joined(fixture: "ws/server/snapshot.host.json", harness: harness)
+
+        #expect(await eventually { harness.media.events.last == "publish" })
+        #expect(harness.media.events.first?.hasPrefix("connect") == true)
+    }
+
+    @Test func unSpectateurNePubliePas() async throws {
+        let harness = Harness()
+        let (_, connection) = try await LiveSessionTests.joined(fixture: "ws/server/snapshot.viewer.json", harness: harness)
+        _ = await eventually { harness.media.events.first?.hasPrefix("connect") == true }
+
+        try connection.push(fixture: "ws/server/hostDisconnected.json")
+        try connection.push(fixture: "ws/server/hostReconnected.json")
+        try connection.push(fixture: "ws/server/snapshot.viewer.json")
+        _ = await eventually(timeout: .milliseconds(200)) { false }
+        #expect(harness.media.events.contains("publish") == false)
+    }
+
+    @Test func unePublicationRateeEstRetenteeAuRattrapageSuivant() async throws {
+        let harness = Harness()
+        let media = FakeMedia()
+        media.failNextPublishes(1)
+        harness.medias.prepare(media)
+        let (_, first) = try await LiveSessionTests.joined(fixture: "ws/server/snapshot.host.json", harness: harness)
+        _ = await eventually { media.events.contains("publish") }
+
+        first.drop()
+        try (try await harness.connection(1)).push(fixture: "ws/server/snapshot.host.json")
+
+        #expect(await eventually { media.events.filter { $0 == "publish" }.count == 2 })
+        #expect(media.events.filter { $0.hasPrefix("connect") }.count == 1)
+    }
 }

@@ -57,6 +57,13 @@ describe("démarrage du serveur commun", () => {
     );
   });
 
+  it.each([
+    ["ADMIN_TOKEN est trop court", { ADMIN_TOKEN: "court" }, /ADMIN_TOKEN/],
+    ["TRUST_PROXY n'est pas un nombre de proxys", { TRUST_PROXY: "oui" }, /TRUST_PROXY/],
+  ])("refuse de démarrer si %s", async (_label, overrides, error) => {
+    await expect(createServer({ env: fullEnv(overrides) })).rejects.toThrow(error);
+  });
+
   it("refuse de démarrer si la config servie est invalide", async () => {
     const configFile = writeTempFile("config.json", JSON.stringify({ reactions: ["❤️"] }));
 

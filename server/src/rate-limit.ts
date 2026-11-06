@@ -1,3 +1,5 @@
+import type { Clock } from "./clock.js";
+
 /**
  * Fenêtre glissante par clé : au plus `limit` passages sur les `windowMs`
  * dernières millisecondes. Vit en mémoire, comme les autres compteurs anti-spam.
@@ -28,5 +30,23 @@ export class SlidingWindow {
     const hits = this.hits.get(key);
     const index = hits?.lastIndexOf(now.getTime()) ?? -1;
     if (hits && index >= 0) hits.splice(index, 1);
+  }
+}
+
+/** Quota fixe : `limit` passages par `windowMs` et par clé, sur l'horloge injectable. */
+export class Quota {
+  private readonly window: SlidingWindow;
+
+  constructor(
+    private readonly limit: number,
+    windowMs: number,
+    private readonly clock: Clock,
+  ) {
+    this.window = new SlidingWindow(windowMs);
+  }
+
+  /** Compte un passage pour `key` et rend `undefined`, ou rend le délai avant de réessayer (ms). */
+  take(key: string): number | undefined {
+    return this.window.take(key, this.limit, this.clock.now());
   }
 }

@@ -1,22 +1,88 @@
 import LiveSDK
 import SwiftUI
 
-/// Cadre du Live. L'App membre fournit son contenu vidéo et ferme l'écran via `onClose`.
-@MainActor
-public struct LiveScreen<Content: View>: View {
-    private let session: LiveSession
+public struct LiveScreen: View {
+    private enum Source {
+        case session(LiveSession)
+        case id(String, LiveSDK)
+    }
+
+    private let source: Source
     private let onClose: () -> Void
-    private let content: Content
-    @State private var showingSheet = false
+    @State private var opened: LiveSession?
+    @State private var openError: String?
+
+    public init(session: LiveSession, onClose: @escaping () -> Void) {
+        source = .session(session)
+        self.onClose = onClose
+    }
+
+    public init(liveId: String, sdk: LiveSDK = .shared, onClose: @escaping () -> Void) {
+        source = .id(liveId, sdk)
+        self.onClose = onClose
+    }
+
+    public var body: some View {
+        Group {
+            if let session = currentSession {
+                LiveStage(session: session, onClose: onClose)
+            } else {
+                ZStack {
+                    Color.black.ignoresSafeArea()
+                    if let openError {
+                        Text(openError).foregroundStyle(.white)
+                    } else {
+                        ProgressView().tint(.white)
+                    }
+                    VStack {
+                        HStack {
+                            Spacer()
+                            CloseButton(label: "Fermer", action: onClose)
+                        }
+                        Spacer()
+                    }
+                    .padding(16)
+                }
+            }
+        }
+        .task {
+            guard case .id(let id, let sdk) = source, opened == nil else { return }
+            do {
+                let session = try await sdk.openLive(id: id)
+                if Task.isCancelled {
+                    await session.leave()
+                } else {
+                    opened = session
+                }
+            } catch {
+                openError = error.displayMessage
+            }
+        }
+        .onDisappear {
+            guard let session = currentSession else { return }
+            Task { await session.leave() }
+        }
+    }
+
+    private var currentSession: LiveSession? {
+        switch source {
+        case .session(let session): session
+        case .id: opened
+        }
+    }
+}
+
+private struct LiveStage: View {
+    let session: LiveSession
+    let onClose: () -> Void
+    @Environment(\.liveTheme) private var theme
+    @State private var chatOpen = false
+    @State private var reactionsOpen = false
+    @State private var audienceOpen = false
+    @State private var recapOpen = false
     @State private var confirmingEnd = false
     @State private var ending = false
     @State private var commandError: String?
-
-    public init(session: LiveSession, onClose: @escaping () -> Void, @ViewBuilder content: () -> Content) {
-        self.session = session
-        self.onClose = onClose
-        self.content = content()
-    }
 
     private var interactive: Bool { session.status == .connected }
     private var recap: LiveRecap? {
@@ -24,68 +90,57 @@ public struct LiveScreen<Content: View>: View {
         return recap
     }
 
-    public var body: some View {
+    var body: some View {
         ZStack {
-            content
-            VStack {
-                HStack {
-                    Text(session.title ?? "Crosslive").font(.headline)
-                    Spacer()
-                    Button {
-                        showingSheet = true
-                    } label: {
-                        Label(session.audience.total.formatted(), systemImage: "eye")
-                    }
-                    .accessibilityLabel("Audience : \(session.audience.total.formatted()) Spectateurs")
-                    .disabled(!interactive)
-                    Button(action: quit) {
-                        Image(systemName: "xmark")
-                    }
-                    .accessibilityLabel(session.role == .host && interactive ? "Terminer le Live" : "Fermer le Live")
-                    .disabled(ending)
-                }
-                .padding()
-                .background(.regularMaterial)
+            HostVideo(session: session).ignoresSafeArea()
+            ReactionsOverlay(session: session)
+            if let notice = statusNotice {
+                Text(notice)
+                    .font(theme.font(15, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
+                    .background(.black.opacity(0.6), in: RoundedRectangle(cornerRadius: theme.cornerRadius))
+            }
+            VStack(spacing: 12) {
+                topBar
                 if interactive && session.role != .host {
                     HostPresenceBanner(connected: session.hostConnected)
                 }
                 Spacer()
-                if let statusMessage {
-                    VStack(spacing: 12) {
-                        Text(statusMessage).multilineTextAlignment(.center)
-                        if interactive == false && session.status != .connecting && session.status != .reconnecting {
-                            Button("Fermer", action: onClose)
-                        }
-                    }
-                    .padding()
-                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
-                }
-                Spacer()
-                if session.role == .host && interactive {
-                    Button("Terminer le Live", role: .destructive) { confirmingEnd = true }
+                if interactive {
+                    RecentMessages(messages: session.messages)
+                    dock
+                } else if case .ended = session.status, recap == nil {
+                    Button("Fermer", action: onClose)
                         .buttonStyle(.borderedProminent)
-                        .disabled(ending)
-                        .padding()
                 }
             }
+            .padding(16)
         }
-        .sheet(isPresented: $showingSheet, onDismiss: {
+        .sheet(isPresented: Binding(
+            get: { chatOpen || reactionsOpen || audienceOpen || recapOpen },
+            set: { if !$0 { closeSheets() } }
+        ), onDismiss: {
             if recap != nil { onClose() }
         }) {
-            NavigationStack {
+            Group {
                 if let recap {
-                    LiveRecapSheet(recap: recap) { showingSheet = false }
+                    NavigationStack { LiveRecapSheet(recap: recap, onClose: closeSheets) }
                         .interactiveDismissDisabled()
+                } else if audienceOpen {
+                    NavigationStack { AudienceSheet(audience: session.audience, onClose: closeSheets) }
+                } else if chatOpen {
+                    ChatSheet(session: session)
                 } else {
-                    AudienceSheet(audience: session.audience) { showingSheet = false }
+                    ReactionsSheet(session: session)
                 }
             }
             .presentationDetents([.medium, .large])
+            .liveTheme(theme)
         }
         .confirmationDialog("Terminer le Live pour tous les Participants ?", isPresented: $confirmingEnd, titleVisibility: .visible) {
-            Button("Terminer le Live", role: .destructive) {
-                Task { await endLive() }
-            }
+            Button("Terminer le Live", role: .destructive) { Task { await endLive() } }
             Button("Annuler", role: .cancel) {}
         }
         .alert("Impossible de terminer le Live", isPresented: Binding(
@@ -95,44 +150,83 @@ public struct LiveScreen<Content: View>: View {
         } message: {
             Text(commandError ?? "Réessayez.")
         }
-        .onChange(of: session.status, initial: true) { _, status in
-            if case .ended = status {
-                showingSheet = recap != nil
-            } else if status != .connected {
-                showingSheet = false
+        .onChange(of: session.status, initial: true) { _, _ in
+            if !interactive {
+                confirmingEnd = false
+                commandError = nil
+                // Garder la même présentation lors du passage au récapitulatif.
+                recapOpen = recap != nil
+                chatOpen = false
+                reactionsOpen = false
+                audienceOpen = false
             }
-            if !interactive { confirmingEnd = false }
         }
-        .onDisappear { Task { await session.leave() } }
+        .background(Color.black)
+        .font(theme.font(16))
+        .tint(theme.accent)
     }
 
-    private var statusMessage: String? {
-        switch session.status {
-        case .connecting: "Connexion au Live…"
-        case .reconnecting: "Connexion perdue, reconnexion…"
-        case .connected: nil
-        case .ended(let reason, _):
-            recap != nil ? nil : (reason == .hostTimeout ? "Le Live est terminé : l’Hôte n’est pas revenu." : "Le Live est terminé.")
-        case .replaced: "Ce Live est ouvert sur un autre appareil."
-        case .banned: "Vous avez été banni de ce Live."
-        case .failed: "Impossible d’ouvrir ce Live."
-        case .left: "Vous avez quitté le Live."
+    private var topBar: some View {
+        HStack {
+            Text(theme.label)
+                .font(theme.font(14, weight: .bold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(theme.accent, in: RoundedRectangle(cornerRadius: theme.cornerRadius))
+            Spacer()
+            Button { audienceOpen = true } label: {
+                Label(session.audience.total.formatted(), systemImage: "eye")
+                    .font(theme.font(14, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .padding(8)
+                    .background(.black.opacity(0.45), in: Capsule())
+            }
+            .accessibilityLabel("Audience : \(session.audience.total.formatted()) Spectateurs")
+            .disabled(!interactive)
+            CloseButton(label: session.role == .host && interactive ? "Terminer le Live" : "Quitter le Live", action: quit)
+                .disabled(ending)
         }
+    }
+
+    private var dock: some View {
+        HStack(spacing: 12) {
+            DockButton(symbol: "💬", label: "Ouvrir le chat") { chatOpen = true }
+            Spacer()
+            if session.role == .host {
+                Button("Terminer le Live", role: .destructive) { confirmingEnd = true }
+                    .disabled(ending)
+            }
+            Group {
+                if let quick = session.config.reactions.first {
+                    QuickReactionButton(emoji: quick) {
+                        session.react(quick)
+                    } onLongPress: {
+                        reactionsOpen = true
+                    }
+                }
+                DockButton(symbol: "😀", label: "Toutes les Réactions") { reactionsOpen = true }
+            }
+            .disabled(session.status != .connected)
+        }
+        .frame(maxWidth: .infinity, minHeight: 48)
+    }
+
+    private func closeSheets() {
+        chatOpen = false
+        reactionsOpen = false
+        audienceOpen = false
+        recapOpen = false
     }
 
     private func quit() {
-        switch session.status {
-        case .connecting, .connected, .reconnecting:
-            if session.role == .host {
-                confirmingEnd = true
-            } else {
-                Task {
-                    await session.leave()
-                    onClose()
-                }
+        if session.role == .host && interactive {
+            confirmingEnd = true
+        } else {
+            Task {
+                await session.leave()
+                onClose()
             }
-        default:
-            onClose()
         }
     }
 
@@ -148,10 +242,65 @@ public struct LiveScreen<Content: View>: View {
             }
         }
     }
+
+    private var statusNotice: String? {
+        switch session.status {
+        case .connecting: "Connexion au Live…"
+        case .reconnecting: "Reconnexion…"
+        case .connected: nil
+        case .ended(let reason, _):
+            recap != nil ? nil : (reason == .hostTimeout ? "Le Live est terminé : l’Hôte n’est pas revenu." : "Le Live est terminé.")
+        case .replaced: "Ce Live est ouvert sur un autre appareil."
+        case .banned: "Vous avez été exclu de ce Live."
+        case .failed(.liveNotFound): "Ce Live n'existe pas ou est terminé."
+        case .failed: "Impossible de rejoindre ce Live."
+        case .left: nil
+        }
+    }
+}
+
+private struct DockButton: View {
+    let symbol: String
+    let label: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Text(symbol)
+                .font(.system(size: 24))
+                .frame(width: 48, height: 48)
+                .background(.black.opacity(0.45), in: Circle())
+        }
+        .accessibilityLabel(label)
+    }
+}
+
+private struct QuickReactionButton: View {
+    let emoji: String
+    let onTap: () -> Void
+    let onLongPress: () -> Void
+    @Environment(\.isEnabled) private var isEnabled
+
+    var body: some View {
+        Text(emoji)
+            .font(.system(size: 24))
+            .frame(width: 48, height: 48)
+            .background(.black.opacity(0.45), in: Circle())
+            .opacity(isEnabled ? 1 : 0.5)
+            .contentShape(Circle())
+            .onTapGesture { if isEnabled { onTap() } }
+            .onLongPressGesture(minimumDuration: 0.4) { if isEnabled { onLongPress() } }
+            .accessibilityElement()
+            .accessibilityLabel("Réagir \(emoji)")
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction { if isEnabled { onTap() } }
+            .accessibilityAction(named: "Toutes les Réactions") { if isEnabled { onLongPress() } }
+    }
 }
 
 private struct HostPresenceBanner: View {
     let connected: Bool
+    @Environment(\.liveTheme) private var theme
     @State private var returned = false
     @State private var wasDisconnected = false
 
@@ -159,8 +308,11 @@ private struct HostPresenceBanner: View {
         Group {
             if !connected || returned {
                 Text(connected ? "Hôte revenu" : "Hôte déconnecté")
-                    .padding()
-                    .background(.regularMaterial, in: Capsule())
+                    .font(theme.font(15, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
+                    .background(.black.opacity(0.6), in: RoundedRectangle(cornerRadius: theme.cornerRadius))
                     .accessibilityAddTraits(.updatesFrequently)
             }
         }

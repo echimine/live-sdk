@@ -48,20 +48,47 @@ final class TokenProvider: @unchecked Sendable {
 }
 
 final class FakeClock: LiveClock, @unchecked Sendable {
+    private struct Sleeper {
+        let deadline: Date
+        let continuation: CheckedContinuation<Void, Never>
+    }
+
     private let lock = NSLock()
     private var current = Date(timeIntervalSince1970: 1_794_000_000)
     private var recordedSleeps: [Duration] = []
+    private var holding = false
+    private var sleepers: [Sleeper] = []
 
     var now: Date { lock.withLock { current } }
     var sleeps: [Duration] { lock.withLock { recordedSleeps } }
 
+    func holdSleeps() { lock.withLock { holding = true } }
+
     func advance(by interval: TimeInterval) {
-        lock.withLock { current = current.addingTimeInterval(interval) }
+        let due = lock.withLock {
+            current = current.addingTimeInterval(interval)
+            let due = sleepers.filter { $0.deadline <= current }
+            sleepers.removeAll { $0.deadline <= current }
+            return due
+        }
+        due.forEach { $0.continuation.resume() }
     }
 
     func sleep(for duration: Duration) async throws {
-        lock.withLock { recordedSleeps.append(duration) }
-        await Task.yield()
+        let held = lock.withLock {
+            recordedSleeps.append(duration)
+            return holding
+        }
+        guard held else {
+            await Task.yield()
+            return
+        }
+        let seconds = Double(duration.components.seconds) + Double(duration.components.attoseconds) / 1e18
+        await withCheckedContinuation { continuation in
+            lock.withLock {
+                sleepers.append(Sleeper(deadline: current.addingTimeInterval(seconds), continuation: continuation))
+            }
+        }
     }
 }
 
@@ -69,6 +96,7 @@ final class FakeMedia: MediaConnector, @unchecked Sendable {
     private let lock = NSLock()
     private var recorded: [String] = []
     private var failuresLeft = 0
+    private var publishFailuresLeft = 0
     private var gate: CheckedContinuation<Void, Never>?
     private var holding = false
 
@@ -76,6 +104,7 @@ final class FakeMedia: MediaConnector, @unchecked Sendable {
     var isHeld: Bool { lock.withLock { gate != nil } }
 
     func failNextConnects(_ count: Int) { lock.withLock { failuresLeft = count } }
+    func failNextPublishes(_ count: Int) { lock.withLock { publishFailuresLeft = count } }
     func holdConnects() { lock.withLock { holding = true } }
 
     func releaseConnect() {
@@ -95,6 +124,16 @@ final class FakeMedia: MediaConnector, @unchecked Sendable {
             recorded.append("connect \(url.absoluteString) \(token)")
             if failuresLeft > 0 {
                 failuresLeft -= 1
+                throw URLError(.cannotConnectToHost)
+            }
+        }
+    }
+
+    func publishCameraAndMicrophone() async throws {
+        try lock.withLock {
+            recorded.append("publish")
+            if publishFailuresLeft > 0 {
+                publishFailuresLeft -= 1
                 throw URLError(.cannotConnectToHost)
             }
         }

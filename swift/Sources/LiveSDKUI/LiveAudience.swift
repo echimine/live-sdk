@@ -4,6 +4,7 @@ import SwiftUI
 struct AudienceSheet: View {
     let audience: Audience
     let onClose: () -> Void
+    @Environment(\.liveTheme) private var theme
 
     private var apps: [String] {
         audience.byApp.keys.sorted {
@@ -24,6 +25,8 @@ struct AudienceSheet: View {
                 }
             }
         }
+        .font(theme.font(16))
+        .tint(theme.accent)
         .navigationTitle("Audience")
         .toolbar { Button("Fermer", action: onClose) }
     }
@@ -32,6 +35,7 @@ struct AudienceSheet: View {
 struct LiveRecapSheet: View {
     let recap: LiveRecap
     let onClose: () -> Void
+    @Environment(\.liveTheme) private var theme
 
     var body: some View {
         List {
@@ -39,6 +43,8 @@ struct LiveRecapSheet: View {
             LabeledContent("Réactions", value: recap.reactions.formatted())
             LabeledContent("Audience maximale", value: recap.peakAudience.formatted())
         }
+        .font(theme.font(16))
+        .tint(theme.accent)
         .navigationTitle("Live terminé")
         .toolbar { Button("Fermer", action: onClose) }
     }
