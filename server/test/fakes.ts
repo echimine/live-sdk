@@ -6,7 +6,8 @@ export type LivekitCall =
   | { op: "createRoom"; room: string }
   | { op: "deleteRoom"; room: string }
   | ({ op: "issueToken" } & LivekitTokenRequest)
-  | { op: "setCanPublish"; room: string; identity: string; canPublish: boolean };
+  | { op: "setCanPublish"; room: string; identity: string; canPublish: boolean }
+  | { op: "removeParticipant"; room: string; identity: string };
 
 /** Faux LiveKit : enregistre les appels du serveur commun. */
 export class FakeLivekit implements LivekitPort {
@@ -25,6 +26,9 @@ export class FakeLivekit implements LivekitPort {
   }
   async setCanPublish(room: string, identity: string, canPublish: boolean) {
     this.calls.push({ op: "setCanPublish", room, identity, canPublish });
+  }
+  async removeParticipant(room: string, identity: string) {
+    this.calls.push({ op: "removeParticipant", room, identity });
   }
 
   /** Rooms créées et pas encore supprimées. */

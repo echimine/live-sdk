@@ -86,7 +86,7 @@ export async function startLiveServer(
 export async function resetDatabase(): Promise<void> {
   const sql = postgres(databaseUrl, { max: 1, onnotice: () => {} });
   try {
-    await sql`truncate table purchases, chat_messages, products, live_cohosts, lives`;
+    await sql`truncate table live_moderation, purchases, chat_messages, products, live_cohosts, lives`;
   } finally {
     await sql.end({ timeout: 1 });
   }

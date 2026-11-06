@@ -64,8 +64,11 @@ export class ProductStore {
     return row?.total ?? 0;
   }
 
-  /** Enregistre un Achat et son Annonce d'achat dans l'historique du chat, ensemble. */
-  async recordPurchase(liveId: string, message: PurchaseMessage): Promise<void> {
+  /**
+   * Enregistre un Achat et son Annonce d'achat dans l'historique du chat, ensemble ;
+   * `hidden` : Annonce faite en Shadowban, visible du seul acheteur.
+   */
+  async recordPurchase(liveId: string, message: PurchaseMessage, hidden: boolean): Promise<void> {
     const { author, role, product } = message;
     const at = new Date(message.at);
     await this.db.transaction(async (tx) => {
@@ -91,6 +94,7 @@ export class ProductStore {
         kind: "purchase",
         productId: product.id,
         sentAt: at,
+        hidden,
       });
     });
   }
