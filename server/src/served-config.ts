@@ -17,6 +17,8 @@ export interface ServedConfig {
   body: Buffer;
   /** ETag fort : hash SHA-256 du fichier. */
   etag: string;
+  /** Contenu validé : les limites que le serveur applique sont celles que les SDK reçoivent. */
+  config: Config;
 }
 
 export function loadServedConfig(path: string): ServedConfig {
@@ -32,7 +34,7 @@ export function loadServedConfig(path: string): ServedConfig {
   if (!parsed.success) {
     throw new Error(`Config servie invalide (${path}) : ${z.prettifyError(parsed.error)}`);
   }
-  return { body, etag: `"${createHash("sha256").update(body).digest("base64url")}"` };
+  return { body, etag: `"${createHash("sha256").update(body).digest("base64url")}"`, config: parsed.data };
 }
 
 /** `If-None-Match` correspond-il à l'ETag ? (liste séparée par des virgules, ou `*`). */

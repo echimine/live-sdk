@@ -1,7 +1,10 @@
+import { chatText, newMessageId } from "./chat.js";
+import type { ChatStore } from "./chat-store.js";
 import type { Clock, Timer } from "./clock.js";
 import type { LivekitPort } from "./livekit.js";
+import { SlidingWindow } from "./rate-limit.js";
 import { type EndReason, type Live, type LiveStore, newLiveId } from "./live-store.js";
-import type { ErrorCode, LiveSummary, Participant, Role, ServerMessage } from "./protocol/index.js";
+import type { ChatMessage, Config, ErrorCode, LiveSummary, Participant, Role, ServerMessage } from "./protocol/index.js";
 
 /** Socket d'un Participant, vu du Live : le transport reste hors de ce module. */
 export interface Connection {
@@ -14,6 +17,11 @@ export interface Connection {
 export const HOST_GRACE_MS = 60_000;
 /** L'Audience est diffusée au plus à cette cadence, et seulement si elle a changé. */
 export const AUDIENCE_INTERVAL_MS = 2_000;
+/** Limite du chat : messages par fenêtre glissante, selon le rôle. */
+export const CHAT_WINDOW_MS = 10_000;
+export const CHAT_LIMIT: Record<Role, number> = { viewer: 5, cohost: 20, host: 20 };
+/** Messages du chat servis dans le `snapshot`. */
+export const SNAPSHOT_MESSAGES = 50;
 
 type Audience = Omit<Extract<ServerMessage, { type: "audience" }>, "type">;
 
@@ -42,12 +50,32 @@ interface RunningLive {
   /** Dernière Audience diffusée, et prochaine diffusion prévue. */
   audienceSent: Audience;
   audienceTimer: Timer | undefined;
+  /**
+   * Derniers messages du chat, tenus à jour avec les diffusions : le `snapshot`
+   * les sert sans relire la base, donc sans manquer un message envoyé entre-temps.
+   */
+  recentMessages: ChatMessage[];
+  /** Messages récents de chaque Participant, pour la limite du chat. */
+  chatWindow: SlidingWindow;
 }
 
 export type JoinResult = { ok: true; presence: Presence } | { ok: false; code: ErrorCode; message: string };
-export type CommandResult = { ok: true } | { ok: false; code: ErrorCode; message: string };
+export type CommandResult =
+  | { ok: true }
+  | { ok: false; code: Exclude<ErrorCode, "rate_limited">; message: string }
+  | { ok: false; code: "rate_limited"; message: string; retryAfterMs: number };
 
 const liveNotFound = { ok: false, code: "live_not_found", message: "Ce Live n'existe pas ou est terminé." } as const;
+
+export interface LivesDeps {
+  store: LiveStore;
+  chat: ChatStore;
+  livekit: LivekitPort;
+  clock: Clock;
+  log: Logger;
+  /** Config servie aux SDK : le serveur applique les mêmes limites. */
+  config: Config;
+}
 
 /**
  * Cycle de vie des Lives : lancement idempotent, liste, présence des Participants
@@ -60,12 +88,21 @@ export class Lives {
   /** Arrêt du serveur : plus aucun minuteur ne doit tourner. */
   private stopped = false;
 
-  constructor(
-    private readonly store: LiveStore,
-    private readonly livekit: LivekitPort,
-    private readonly clock: Clock,
-    private readonly log: Logger,
-  ) {}
+  private readonly store: LiveStore;
+  private readonly chat: ChatStore;
+  private readonly livekit: LivekitPort;
+  private readonly clock: Clock;
+  private readonly log: Logger;
+  private readonly config: Config;
+
+  constructor(deps: LivesDeps) {
+    this.store = deps.store;
+    this.chat = deps.chat;
+    this.livekit = deps.livekit;
+    this.clock = deps.clock;
+    this.log = deps.log;
+    this.config = deps.config;
+  }
 
   /**
    * Lance un Live pour cet Hôte, ou rend celui qu'il a déjà en cours (reprise
@@ -197,6 +234,86 @@ export class Lives {
     return { ok: true };
   }
 
+  /** Un Participant écrit dans le chat : `ack` (via `accepted`), puis `chatMessage` à tous, auteur compris. */
+  async sendMessage(presence: Presence, text: string, accepted: () => void): Promise<CommandResult> {
+    const state = this.running.get(presence.liveId);
+    if (!state || state.ending) return liveNotFound;
+    const visible = chatText(text, this.config.chat.maxLength);
+    if (visible === undefined) {
+      const max = this.config.chat.maxLength;
+      return { ok: false, code: "invalid_message", message: `Message vide ou de plus de ${max} caractères.` };
+    }
+    const author = presence.participant.id;
+    const sentAt = this.clock.now();
+    const retryAfterMs = state.chatWindow.take(author, CHAT_LIMIT[presence.role], sentAt);
+    if (retryAfterMs !== undefined) {
+      const limit = CHAT_LIMIT[presence.role];
+      return { ok: false, code: "rate_limited", message: `Doucement… (${limit} messages par 10 s)`, retryAfterMs };
+    }
+    const message = {
+      id: newMessageId(),
+      kind: "text",
+      author: presence.participant,
+      role: presence.role,
+      text: visible,
+      at: sentAt.toISOString(),
+    } satisfies ChatMessage;
+    try {
+      await this.chat.insert(state.live.id, message);
+    } catch (error) {
+      // Message perdu : il ne compte pas dans la limite.
+      state.chatWindow.giveBack(author, sentAt);
+      throw error;
+    }
+    // Le Live a pu se terminer pendant l'écriture : le message est conservé, sans diffusion.
+    if (state.ending || this.running.get(state.live.id) !== state) return liveNotFound;
+    state.recentMessages = [...state.recentMessages, message].slice(-SNAPSHOT_MESSAGES);
+    accepted();
+    broadcast(state, { type: "chatMessage", message });
+    return { ok: true };
+  }
+
+  /**
+   * Un Animateur supprime un message : suppression marquée, `ack` (via `accepted`),
+   * puis `messageDeleted` à tous. Le message sort des `snapshot` suivants.
+   */
+  async deleteMessage(presence: Presence, messageId: string, accepted: () => void): Promise<CommandResult> {
+    if (presence.role === "viewer") {
+      return { ok: false, code: "not_animator", message: "Seuls les Animateurs peuvent supprimer un message." };
+    }
+    const state = this.running.get(presence.liveId);
+    if (!state || state.ending) return liveNotFound;
+    if (!(await this.chat.markDeleted(state.live.id, messageId, this.clock.now()))) {
+      return { ok: false, code: "not_found", message: "Message introuvable." };
+    }
+    // Le Live a pu se terminer pendant l'écriture : la suppression est conservée, sans diffusion.
+    if (state.ending || this.running.get(state.live.id) !== state) return liveNotFound;
+    state.recentMessages = state.recentMessages.filter((message) => message.id !== messageId);
+    accepted();
+    broadcast(state, { type: "messageDeleted", messageId });
+    // La suppression est faite et annoncée : un échec du complément ne la remet pas en cause.
+    await this.refillRecentMessages(state).catch((error: unknown) => {
+      this.log.error({ err: error, liveId: state.live.id }, "relecture des derniers messages impossible");
+    });
+    return { ok: true };
+  }
+
+  /**
+   * Après une suppression, complète les derniers messages depuis la base pour que
+   * le `snapshot` en serve toujours `SNAPSHOT_MESSAGES`. Seuls des messages plus
+   * anciens que le plus ancien gardé en mémoire sont ajoutés : un plus récent qui
+   * n'y est pas a été supprimé, et un message envoyé pendant la lecture y est déjà.
+   */
+  private async refillRecentMessages(state: RunningLive): Promise<void> {
+    const stored = await this.chat.recent(state.live.id, SNAPSHOT_MESSAGES);
+    const current = state.recentMessages;
+    const oldestKept = current[0];
+    const olderCount = oldestKept === undefined ? stored.length : stored.findIndex((m) => m.id === oldestKept.id);
+    // Le plus ancien gardé n'est plus en base (supprimé pendant la lecture) : on laisse la mémoire telle quelle.
+    if (olderCount <= 0) return;
+    state.recentMessages = [...stored.slice(0, olderCount), ...current].slice(-SNAPSHOT_MESSAGES);
+  }
+
   /** Prévoit une diffusion de l'Audience, au plus tôt `AUDIENCE_INTERVAL_MS` après la précédente. */
   private scheduleAudience(state: RunningLive): void {
     if (state.audienceTimer || state.ending || this.stopped) return;
@@ -259,9 +376,8 @@ export class Lives {
     if (state) return Promise.resolve(state);
     let pending = this.loading.get(liveId);
     if (!pending) {
-      pending = this.store
-        .findRunning(liveId)
-        .then((live) => {
+      pending = Promise.all([this.store.findRunning(liveId), this.chat.recent(liveId, SNAPSHOT_MESSAGES)])
+        .then(([live, recentMessages]) => {
           if (!live) return undefined;
           const loaded: RunningLive = {
             live,
@@ -271,6 +387,8 @@ export class Lives {
             hostGrace: undefined,
             audienceSent: { total: 0, byApp: {} },
             audienceTimer: undefined,
+            recentMessages,
+            chatWindow: new SlidingWindow(CHAT_WINDOW_MS),
           };
           this.running.set(liveId, loaded);
           // L'Hôte n'est pas encore là (redémarrage, reprise) : son Délai de grâce court dès maintenant.
@@ -296,7 +414,7 @@ export class Lives {
       cohosts: [],
       audience: audienceOf(state),
       reactionsTotal: 0,
-      messages: [],
+      messages: state.recentMessages,
       livekit: { url: this.livekit.url, token: livekitToken },
       // Demandes de montée pour l'Hôte seul, modération pour les Animateurs seuls.
       ...(presence.role === "host" && { joinRequests: [], moderation: { shadowbanned: [], banned: [] } }),
