@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect } from "vitest";
+import { PING_INTERVAL_MS } from "../src/live-socket.js";
 import { LivesCreateResponse, LivesListResponse, ServerMessage } from "../src/protocol/index.js";
 import type { TestSocket } from "./fakes.js";
 import { bearer, participantToken, resetDatabase, startLiveServer, type LiveServer } from "./support.js";
@@ -79,9 +80,31 @@ export function useLiveServer(options: Parameters<typeof startLiveServer>[0] = {
      * Aller-retour par une commande inconnue : tout ce que le client a envoyé avant
      * est traité, et rien d'autre n'arrive avant la réponse.
      */
-    async sync(socket: TestSocket) {
+    async sync(socket: TestSocket, { skipAudience = false } = {}) {
       socket.send({ type: "pasUneCommande", ref: "sync" });
-      expect(await socket.next()).toMatchObject({ type: "error", ref: "sync", code: "unknown_command" });
+      const message = skipAudience ? await harness.nextNotAudience(socket) : await socket.next();
+      expect(message).toMatchObject({ type: "error", ref: "sync", code: "unknown_command" });
+    },
+
+    /** Prochain message hors diffusion d'Audience (qui part dès que l'horloge passe 2 s). */
+    async nextNotAudience(socket: TestSocket) {
+      let message = await socket.next();
+      while (message.type === "audience") message = await socket.next();
+      return message;
+    },
+
+    /**
+     * Avance l'horloge par demi-intervalles de ping, avec un aller-retour entre deux
+     * pas : les sockets répondent aux pings et restent ouverts, comme des clients
+     * sains. Les diffusions d'Audience reçues entre-temps sont ignorées.
+     */
+    async elapse(ms: number, sockets: TestSocket[]) {
+      for (let remaining = ms; remaining > 0; ) {
+        const step = Math.min(PING_INTERVAL_MS / 2, remaining);
+        live.clock.advance(step);
+        remaining -= step;
+        if (remaining > 0) for (const socket of sockets) await harness.sync(socket, { skipAudience: true });
+      }
     },
   };
   return harness;
