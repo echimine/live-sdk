@@ -24,7 +24,7 @@ await LiveSDK.shared.configure(serverURL: URL(string: "https://live.echimine.fr"
 | --- | --- |
 | `LiveListScreen(onOpenLive:onLaunch:)` | Lives en cours de toutes les App membres (titre, Hôte, App d'origine, Audience) + champ de lien direct |
 | `LiveLaunchScreen(onLaunched:onClose:)` | Aperçu caméra, vérifications (caméra, micro, serveur), titre facultatif ≤ 80, « Lancer » |
-| `LiveScreen(liveId:onClose:)` / `LiveScreen(session:onClose:)` | Le Live en plein écran : vidéo de l'Hôte, barre du haut (libellé du Live, Audience par App d’origine, ✕), 2 derniers messages, dock (💬 chat en feuille mi-hauteur, ❤️ Réaction rapide / appui long, 😀 toutes les Réactions), Réactions de tous en animation |
+| `LiveScreen(liveId:onClose:)` / `LiveScreen(session:onClose:)` | Le Live en plein écran : mosaïque de l'Hôte et des Co-hôtes, barre du haut (libellé du Live, Audience par App d’origine, ✕), 2 derniers messages, dock (💬 chat en feuille mi-hauteur, ❤️ Réaction rapide / appui long, 😀 toutes les Réactions), Réactions de tous en animation |
 
 La navigation reste à votre app : chaque écran rend la main par ses callbacks.
 `LiveLink.liveId(from:)` extrait l'identifiant d'un lien collé, pour brancher vos propres liens.
@@ -75,6 +75,15 @@ L’Hôte confirme « Terminer le Live ». Une erreur permet de réessayer ; un 
 
 `startLive(title:)` utilise le lancement idempotent du serveur : un Live en cours est rendu avec son titre initial (HTTP 200), un nouveau Live avec HTTP 201. Les deux réponses sont acceptées.
 
+## Co-hôtes et mosaïque
+
+La vidéo est une mosaïque portrait de 6 personnes au plus (`StageMosaic`) : 1 plein écran, 2 empilées, 2 × 2, puis 2 × 3 ; l’Hôte en haut à gauche, puis les Co-hôtes par ordre de montée (`session.stage`). La room LiveKit est en simulcast et `adaptiveStream` : chaque tuile reçoit la qualité de sa taille.
+
+- Spectateur : ✋ demande à monter (caméra et micro autorisés d’abord), puis l’annule. `session.joinRequestPending` suit la demande ; le serveur ne signale pas un refus, et une reconnexion perd la demande.
+- Acceptation : `roleChanged` publie caméra et micro dans la room déjà connectée, sans nouveau jeton ni reconnexion. Redescendre (soi-même ou retiré par l’Hôte) coupe la publication ; on reste dans le Live.
+- Hôte : ⚙️ Gestion porte le nombre de Demandes de montée en attente, permet d’accepter, refuser et retirer un Co-hôte, avec le compte `n/5` (`LiveSession.maxCohosts`) ; `cohost_limit` est affiché.
+- Co-hôte : « Redescendre », après confirmation.
+
 ## Vérification manuelle (iOS 17+)
 
 La spécification #19 prévoit une vérification manuelle des écrans, sans tests UI automatisés en v1. Avec le serveur local et deux Participants :
@@ -85,5 +94,6 @@ La spécification #19 prévoit une vérification manuelle des écrans, sans test
 4. Depuis l’Hôte, annuler puis confirmer la fin. Vérifier le récapitulatif et sa fermeture ; le Spectateur doit voir la fin sans récapitulatif. Répéter avec la feuille Audience ouverte à la réception de la fin.
 5. Refaire avec l’Hôte absent plus de 60 secondes : vérifier le motif de fin chez le Spectateur. Vérifier aussi le remplacement de connexion et le Bannissement.
 6. Appeler deux fois `startLive` depuis le même Hôte : vérifier le même identifiant et le titre initial. Vérifier les commandes refusées et la possibilité de réessayer.
+7. Co-hôtes : depuis un Spectateur, ✋ puis annuler ; vérifier le badge de ⚙️ chez l’Hôte. Redemander, accepter : la caméra du Co-hôte apparaît sans reconnexion, chez tous, à la bonne place. Monter jusqu’à 6 personnes (1, 2, 2 × 2, 2 × 3), tenter une 6e acceptation (`cohost_limit`), retirer un Co-hôte, puis faire redescendre un Co-hôte de lui-même.
 
 Validation automatisée : `swift test`, puis `xcodebuild -scheme LiveSDK-Package -destination 'generic/platform=iOS Simulator' -quiet build`.

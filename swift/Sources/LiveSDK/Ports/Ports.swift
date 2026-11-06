@@ -52,6 +52,7 @@ public protocol LiveClock: Sendable {
 public protocol MediaConnector: Sendable {
     func connect(url: URL, token: String) async throws
     func publishCameraAndMicrophone() async throws
+    func unpublishCameraAndMicrophone() async throws
     func disconnect() async
 }
 

@@ -139,6 +139,10 @@ final class FakeMedia: MediaConnector, @unchecked Sendable {
         }
     }
 
+    func unpublishCameraAndMicrophone() async throws {
+        lock.withLock { recorded.append("unpublish") }
+    }
+
     func disconnect() async {
         lock.withLock { recorded.append("disconnect") }
     }
