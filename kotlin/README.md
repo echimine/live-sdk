@@ -35,12 +35,17 @@ LiveSdk.configure(
 | --- | --- |
 | `LiveListScreen(onOpenLive, onLaunch)` | Lives en cours de toutes les App membres (titre, Hôte, App d'origine, Audience) + champ de lien direct |
 | `LiveLaunchScreen(onLaunched, onClose)` | Aperçu caméra, vérifications (caméra, micro, serveur), titre facultatif ≤ 80, « Lancer » |
-| `LiveScreen(liveId, onClose)` / `LiveScreen(live, onClose)` | Le Live en plein écran : vidéo, barre du haut (libellé du Live, ✕), 2 derniers messages, dock (💬 chat en feuille mi-hauteur, ❤️ Réaction rapide / appui long, 😀 toutes les Réactions), Réactions de tous en animation |
+| `LiveScreen(liveId, onClose)` / `LiveScreen(live, onClose)` | Le Live en plein écran : vidéo, barre du haut (libellé du Live, 👁 Audience → feuille par App d'origine, ✕), bandeaux « Hôte déconnecté » / « Hôte revenu », 2 derniers messages, dock (💬 chat en feuille mi-hauteur, ❤️ Réaction rapide / appui long, 😀 toutes les Réactions), Réactions de tous en animation. Pour l'Hôte, ✕ propose de terminer le Live puis affiche le récapitulatif de fin (Achats, Réactions, Audience max.) ; pour les autres, la fin du Live s'annonce avec « Fermer » |
 
 Sans les écrans, le cœur suffit : `live.sendMessage(text)` refuse un message vide ou trop long
 (`InvalidMessage`) sans rien envoyer, et verrouille le chat après un `rate_limited`
 (`live.state.value.chatLocked`, le temps indiqué) ; `live.react(emoji)` n'envoie qu'un emoji de
 `live.config.value.reactions` et l'anime aussitôt via `live.events`.
+
+`client.startLive(title)` alors qu'un Live de cet Hôte est déjà en cours rend ce Live (reprise après
+un crash). `live.endLive()` le termine pour tous : la fin arrive dans `live.state` (`Connection.Ended`),
+avec `summary` pour l'Hôte seul. L'Audience est dans `live.state.value.live?.audience`
+(`audience.ranked` : par App d'origine, de la plus présente à la moins présente).
 
 La navigation reste à votre app : chaque écran rend la main par ses callbacks.
 `liveIdFrom(text)` extrait l'identifiant d'un lien collé, pour brancher vos propres liens.

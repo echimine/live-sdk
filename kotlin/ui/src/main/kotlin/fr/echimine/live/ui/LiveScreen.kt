@@ -98,6 +98,11 @@ public fun LiveScreen(
     val interactive = details != null && !state.connection.isFinal
     var chatOpen by rememberSaveable(live.id) { mutableStateOf(false) }
     var reactionsOpen by rememberSaveable(live.id) { mutableStateOf(false) }
+    var audienceOpen by rememberSaveable(live.id) { mutableStateOf(false) }
+    var endOpen by rememberSaveable(live.id) { mutableStateOf(false) }
+    // L'Hôte termine son Live en le quittant ; les autres le quittent simplement.
+    val hosting = hostIsYou && interactive
+    val onQuit = { if (hosting) endOpen = true else onClose() }
     val floating = remember(live) { FloatingReactions() }
     LaunchedEffect(live) {
         live.events.collect { event -> if (event is LiveEvent.ReactionsReceived) floating.launch(event.counts) }
@@ -108,8 +113,12 @@ public fun LiveScreen(
             VideoTrackView(room, camera, mirror = hostIsYou, modifier = Modifier.fillMaxSize())
             Scrims()
             Column(Modifier.fillMaxSize().safeDrawingPadding()) {
-                TopBar(state, onClose)
+                TopBar(state, hosting, onQuit, onOpenAudience = { audienceOpen = true })
                 Box(Modifier.weight(1f).fillMaxWidth(), Alignment.Center) {
+                    // Sa propre reconnexion passe d'abord : l'état de l'Hôte attend le prochain `snapshot`.
+                    if (interactive && !hostIsYou && state.connection == Connection.Connected) {
+                        HostPresenceBanner(details.hostConnected, Modifier.align(Alignment.TopCenter).padding(top = 8.dp))
+                    }
                     StatusOverlay(state, hasVideo = camera != null, onClose = onClose)
                     FloatingReactionsLayer(
                         floating,
@@ -141,6 +150,16 @@ public fun LiveScreen(
             }
             if (reactionsOpen && interactive) {
                 ReactionSheet(config.reactions, onReact = live::react, onDismiss = { reactionsOpen = false })
+            }
+            if (audienceOpen && interactive) {
+                AudienceSheet(details.audience, onDismiss = { audienceOpen = false })
+            }
+            if (endOpen && interactive) {
+                EndLiveDialog(live, onDismiss = { endOpen = false })
+            }
+            val summary = (state.connection as? Connection.Ended)?.summary
+            if (summary != null) {
+                EndSummarySheet(summary, onClose = onClose)
             }
         }
     }
@@ -178,7 +197,7 @@ private fun Scrims() {
 }
 
 @Composable
-private fun TopBar(state: LiveState, onClose: () -> Unit) {
+private fun TopBar(state: LiveState, hosting: Boolean, onClose: () -> Unit, onOpenAudience: () -> Unit) {
     val theme = LocalLiveTheme.current
     val details = state.live
     Row(
@@ -215,10 +234,13 @@ private fun TopBar(state: LiveState, onClose: () -> Unit) {
                     overflow = TextOverflow.Ellipsis,
                 )
             }
+            Spacer(Modifier.width(8.dp))
+            AudienceChip(details.audience, onClick = onOpenAudience)
+            Spacer(Modifier.width(8.dp))
         } else {
             Spacer(Modifier.weight(1f))
         }
-        CloseButton("Quitter le Live", onClose)
+        CloseButton(if (hosting) "Terminer le Live" else "Quitter le Live", onClose)
     }
 }
 
@@ -238,12 +260,10 @@ private fun StatusOverlay(state: LiveState, hasVideo: Boolean, onClose: () -> Un
     val message = when (val connection = state.connection) {
         Connection.Connecting -> "Connexion au Live…"
         is Connection.Reconnecting -> "Connexion perdue, reconnexion…"
-        Connection.Connected -> when {
-            state.live?.hostConnected == false -> "L'Hôte a perdu la connexion. En attente de son retour…"
-            !hasVideo -> "En attente de la vidéo…"
-            else -> null
-        }
-        is Connection.Ended -> when (connection.reason) {
+        // L'Hôte absent est signalé par le bandeau « Hôte déconnecté ».
+        Connection.Connected -> "En attente de la vidéo…".takeIf { !hasVideo && state.live?.hostConnected != false }
+        // L'Hôte voit à la place son récapitulatif de fin.
+        is Connection.Ended -> if (connection.summary != null) null else when (connection.reason) {
             LiveState.EndReason.HostTimeout -> "Le Live est terminé : l'Hôte n'est pas revenu."
             else -> "Le Live est terminé."
         }
