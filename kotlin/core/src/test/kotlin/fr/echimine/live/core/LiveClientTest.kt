@@ -1,3 +1,5 @@
+@file:OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+
 package fr.echimine.live.core
 
 import kotlinx.coroutines.test.StandardTestDispatcher
@@ -227,6 +229,23 @@ class LiveClientTest {
         assertEquals("wss://live.example/v1/lives/lv%201%2F2/ws", transport.connectedUrls.single())
         val join = transport.socket.sent.single()
         assertEquals("join", join["type"]!!.jsonPrimitive.content)
+        client.close()
+    }
+
+    @Test
+    fun uneConfigIllisibleNEcrasePasLeCache() = runTest {
+        transport.http = { config("""{"chat":{"maxLength":100}}""") }
+        val client = configure()
+        runCurrent()
+
+        advanceTimeBy(5 * 60_000 + 1)
+        transport.http = { config("<html>proxy</html>", etag = "\"proxy\"") }
+        client.openLive("lv_1").close()
+        assertEquals(100, client.config.value.chatMaxLength)
+
+        client.openLive("lv_1").close()
+        assertEquals(3, transport.configRequests().size) // réponse illisible : pas de fraîcheur gagnée
+        assertEquals("\"v2\"", transport.configRequests()[2].headers["If-None-Match"])
         client.close()
     }
 }

@@ -20,7 +20,6 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.DeserializationStrategy
 import kotlinx.serialization.SerializationException
-import java.io.IOException
 import java.net.URLEncoder
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
@@ -32,6 +31,18 @@ import kotlin.time.TimeSource
  * (`POST /live/participant-token`). Appelé à chaque connexion et reconnexion.
  */
 public typealias TokenProvider = suspend () -> String
+
+/**
+ * Exécute [block] en capturant ses échecs, sauf l'annulation de la coroutine, qui se propage.
+ */
+internal suspend inline fun <T> catchingFailures(block: suspend () -> T): Result<T> =
+    try {
+        Result.success(block())
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        Result.failure(e)
+    }
 
 /** Point d'entrée du cœur du SDK Live. */
 public object LiveSdk {
@@ -50,8 +61,15 @@ public object LiveSdk {
         serverUrl: String,
         tokenProvider: TokenProvider,
         transport: LiveTransport = OkHttpLiveTransport(),
-        dispatcher: CoroutineDispatcher = Dispatchers.Default,
-        timeSource: TimeSource = TimeSource.Monotonic,
+    ): LiveClient = configure(serverUrl, tokenProvider, transport, Dispatchers.Default, TimeSource.Monotonic)
+
+    /** Variante des tests : temps et coroutines virtuels. */
+    internal fun configure(
+        serverUrl: String,
+        tokenProvider: TokenProvider,
+        transport: LiveTransport,
+        dispatcher: CoroutineDispatcher,
+        timeSource: TimeSource,
     ): LiveClient {
         val client = LiveClient(serverUrl, tokenProvider, transport, dispatcher, timeSource)
         synchronized(this) {
@@ -126,18 +144,16 @@ public class LiveClient internal constructor(
         val fetchedAt = configFetchedAt
         if (fetchedAt != null && fetchedAt.elapsedNow() < CONFIG_MAX_AGE) return@withLock
         val headers = authorization() ?: return@withLock
-        val response = try {
-            transport.request(
-                HttpRequest("GET", "$baseUrl/v1/config", headers + listOfNotNull(configETag?.let { "If-None-Match" to it })),
-            )
-        } catch (e: CancellationException) {
-            throw e
-        } catch (_: Exception) {
-            return@withLock // hors ligne : on garde le cache ou les valeurs par défaut
-        }
+        val request = HttpRequest(
+            "GET",
+            "$baseUrl/v1/config",
+            headers + listOfNotNull(configETag?.let { "If-None-Match" to it }),
+        )
+        // Hors ligne ou réponse illisible : on garde le cache, ou les valeurs par défaut.
+        val response = catchingFailures { transport.request(request) }.getOrNull() ?: return@withLock
         when (response.status) {
             200 -> {
-                configState.value = Wire.decodeConfig(response.body)
+                configState.value = Wire.decodeConfig(response.body) ?: return@withLock
                 configETag = response.header("ETag")
                 configFetchedAt = timeSource.markNow()
             }
@@ -148,13 +164,7 @@ public class LiveClient internal constructor(
     // ------------------------------------------------------------ HTTP
 
     private suspend fun authorization(): Map<String, String>? =
-        try {
-            mapOf("Authorization" to "Bearer ${tokenProvider()}")
-        } catch (e: CancellationException) {
-            throw e
-        } catch (_: Exception) {
-            null
-        }
+        catchingFailures { mapOf("Authorization" to "Bearer ${tokenProvider()}") }.getOrNull()
 
     private suspend fun <T> http(
         method: String,
@@ -165,13 +175,8 @@ public class LiveClient internal constructor(
         val auth = authorization()
             ?: return failure(LiveErrorCode.TokenUnavailable, "Le Jeton de Participant n'a pas pu être obtenu.")
         val headers = if (body != null) auth + ("Content-Type" to "application/json") else auth
-        val response = try {
-            transport.request(HttpRequest(method, baseUrl + path, headers, body))
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: IOException) {
-            return failure(LiveErrorCode.Network, e.message ?: "Serveur injoignable.")
-        }
+        val response = catchingFailures { transport.request(HttpRequest(method, baseUrl + path, headers, body)) }
+            .getOrElse { return failure(LiveErrorCode.Network, it.message ?: "Serveur injoignable.") }
         if (response.status !in 200..299) return LiveResult.Failure(httpError(response))
         return try {
             LiveResult.Success(Wire.json.decodeFromString(deserializer, response.body))

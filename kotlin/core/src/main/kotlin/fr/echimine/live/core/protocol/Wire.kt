@@ -2,7 +2,9 @@ package fr.echimine.live.core.protocol
 
 import fr.echimine.live.core.LiveConfig
 import kotlinx.serialization.ExperimentalSerializationApi
+import fr.echimine.live.core.ChatMessage
 import kotlinx.serialization.KSerializer
+import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.descriptors.PrimitiveKind
 import kotlinx.serialization.descriptors.PrimitiveSerialDescriptor
@@ -11,6 +13,7 @@ import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonDecoder
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -48,14 +51,17 @@ internal object Wire {
 
     // ------------------------------------------------------------ config
 
-    /** Clé par clé : une clé absente ou invalide reprend la valeur par défaut. */
-    fun decodeConfig(text: String): LiveConfig {
+    /**
+     * Clé par clé : une clé absente ou invalide reprend la valeur par défaut.
+     * `null` si le corps n'est pas un objet JSON (réponse d'un proxy, par exemple).
+     */
+    fun decodeConfig(text: String): LiveConfig? {
         val defaults = LiveConfig.Defaults
         val root = try {
             json.parseToJsonElement(text) as? JsonObject
         } catch (_: SerializationException) {
             null
-        } ?: return defaults
+        } ?: return null
         return LiveConfig(
             reactions = root["reactions"].stringList()?.takeIf { it.size in 4..16 } ?: defaults.reactions,
             chatMaxLength = root.child("chat")?.get("maxLength").positiveLong()?.toIntOrNull()
@@ -105,7 +111,7 @@ internal object Wire {
     fun roundTripClientMessage(text: String): JsonElement =
         json.encodeToJsonElement(ClientMessage.serializer(), json.decodeFromString(ClientMessage.serializer(), text))
 
-    fun roundTripConfig(text: String): JsonElement = encodeConfig(decodeConfig(text))
+    fun roundTripConfig(text: String): JsonElement = encodeConfig(checkNotNull(decodeConfig(text)))
 
     fun roundTripHttp(name: String, text: String): JsonElement = when (name) {
         "lives.list.response" -> roundTrip(LivesListResponse.serializer(), text)
@@ -118,6 +124,29 @@ internal object Wire {
 
     private fun <T> roundTrip(serializer: KSerializer<T>, text: String): JsonElement =
         json.encodeToJsonElement(serializer, json.decodeFromString(serializer, text))
+}
+
+/** Liste de messages du chat dont les éléments illisibles (genre inconnu…) sont écartés un à un. */
+internal object LenientChatMessages : KSerializer<List<ChatMessage>> {
+    private val strict = ListSerializer(ChatMessage.serializer())
+
+    override val descriptor: SerialDescriptor = strict.descriptor
+
+    override fun serialize(encoder: Encoder, value: List<ChatMessage>) = strict.serialize(encoder, value)
+
+    override fun deserialize(decoder: Decoder): List<ChatMessage> {
+        val input = decoder as? JsonDecoder ?: return strict.deserialize(decoder)
+        val array = input.decodeJsonElement() as? JsonArray ?: throw SerializationException("liste attendue")
+        return array.mapNotNull { element ->
+            try {
+                input.json.decodeFromJsonElement(ChatMessage.serializer(), element)
+            } catch (_: SerializationException) {
+                null
+            } catch (_: IllegalArgumentException) {
+                null
+            }
+        }
+    }
 }
 
 /** Horodatage ISO 8601 en UTC, toujours à la milliseconde comme le serveur (`toISOString`). */

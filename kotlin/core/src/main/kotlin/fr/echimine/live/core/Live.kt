@@ -4,7 +4,6 @@ import fr.echimine.live.core.protocol.ClientMessage
 import fr.echimine.live.core.protocol.Command
 import fr.echimine.live.core.protocol.ServerMessage
 import fr.echimine.live.core.protocol.Wire
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
@@ -57,7 +56,18 @@ public data class LiveState(
         public data object Closed : Connection
     }
 
-    public enum class EndReason { EndedByHost, HostTimeout, Unknown }
+    public enum class EndReason(internal val wire: String?) {
+        EndedByHost("endedByHost"),
+        HostTimeout("hostTimeout"),
+
+        /** Raison que cette version du SDK ne connaît pas. */
+        Unknown(null),
+        ;
+
+        internal companion object {
+            fun fromWire(reason: String): EndReason = entries.firstOrNull { it.wire == reason } ?: Unknown
+        }
+    }
 }
 
 /** Contenu d'un Live, à jour après chaque `snapshot` et chaque événement. */
@@ -111,7 +121,7 @@ public class Live internal constructor(
     private val refs = AtomicInteger()
 
     @Volatile
-    private var connected: WebSocketConnection? = null
+    private var activeSocket: WebSocketConnection? = null
 
     public val state: StateFlow<LiveState> = stateFlow.asStateFlow()
     public val events: SharedFlow<LiveEvent> = eventFlow.asSharedFlow()
@@ -185,17 +195,17 @@ public class Live internal constructor(
 
     /** Envoie une Réaction, sans accusé de réception ; ignorée hors connexion. */
     public fun react(emoji: String) {
-        connected?.send(Wire.encodeClientMessage(ClientMessage.React(emoji)))
+        activeSocket?.send(Wire.encodeClientMessage(ClientMessage.React(emoji)))
     }
 
     private suspend fun command(build: (ref: String) -> Command): LiveResult<Unit> {
-        val socket = connected ?: return notConnected()
+        val socket = activeSocket ?: return notConnected()
         val ref = "c${refs.incrementAndGet()}"
         val reply = CompletableDeferred<LiveResult<Unit>>()
         pending[ref] = reply
         try {
             // Le socket a pu tomber entre-temps : sa fermeture n'aurait pas vu cette commande.
-            if (connected !== socket) return notConnected()
+            if (activeSocket !== socket) return notConnected()
             socket.send(Wire.encodeClientMessage(build(ref)))
             return withTimeoutOrNull(COMMAND_TIMEOUT) { reply.await() }
                 ?: LiveResult.Failure(LiveError(LiveErrorCode.Timeout, "Pas de réponse du serveur commun."))
@@ -234,19 +244,11 @@ public class Live internal constructor(
     }
 
     private suspend fun connectOnce(): Outcome {
-        val token = try {
-            tokenProvider()
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            return Outcome.Retry(LiveError(LiveErrorCode.TokenUnavailable, e.message ?: "Jeton indisponible."), false)
+        val token = catchingFailures { tokenProvider() }.getOrElse {
+            return Outcome.Retry(LiveError(LiveErrorCode.TokenUnavailable, it.message ?: "Jeton indisponible."), false)
         }
-        val socket = try {
-            transport.connect(url)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            return Outcome.Retry(LiveError(LiveErrorCode.Network, e.message ?: "Serveur injoignable."), false)
+        val socket = catchingFailures { transport.connect(url) }.getOrElse {
+            return Outcome.Retry(LiveError(LiveErrorCode.Network, it.message ?: "Serveur injoignable."), false)
         }
         var caughtUp = false
         try {
@@ -258,7 +260,7 @@ public class Live internal constructor(
                     is ServerMessage.Snapshot -> {
                         caughtUp = true
                         stateFlow.value = LiveState(LiveState.Connection.Connected, message.toDetails())
-                        connected = socket
+                        activeSocket = socket
                     }
                     is ServerMessage.Ack -> pending[message.ref]?.complete(LiveResult.Success(Unit))
                     is ServerMessage.Error -> {
@@ -284,11 +286,7 @@ public class Live internal constructor(
                         return Outcome.Stop
                     }
                     is ServerMessage.LiveEnded -> {
-                        val reason = when (message.reason) {
-                            "endedByHost" -> LiveState.EndReason.EndedByHost
-                            "hostTimeout" -> LiveState.EndReason.HostTimeout
-                            else -> LiveState.EndReason.Unknown
-                        }
+                        val reason = LiveState.EndReason.fromWire(message.reason)
                         val summary = message.summary?.let { LiveEndSummary(it.purchases, it.reactions, it.peakAudience) }
                         finish(LiveState.Connection.Ended(reason, summary))
                         return Outcome.Stop
@@ -297,7 +295,7 @@ public class Live internal constructor(
                 }
             }
         } finally {
-            connected = null
+            activeSocket = null
             socket.close()
             val error = LiveError(LiveErrorCode.NotConnected, "Connexion perdue avant la réponse.")
             pending.values.forEach { it.complete(LiveResult.Failure(error)) }

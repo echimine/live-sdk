@@ -42,7 +42,8 @@ internal sealed interface ServerMessage {
         val pinnedProduct: Product? = null,
         val audience: Audience,
         val reactionsTotal: Int,
-        val messages: List<ChatMessage>,
+        /** Un message d'un genre inconnu est écarté, sans rendre le `snapshot` illisible. */
+        @Serializable(with = LenientChatMessages::class) val messages: List<ChatMessage>,
         val livekit: LiveKitCredentials,
         val joinRequests: List<Participant>? = null,
         val moderation: ModerationLists? = null,

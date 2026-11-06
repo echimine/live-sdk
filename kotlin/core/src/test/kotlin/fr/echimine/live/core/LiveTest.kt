@@ -1,3 +1,5 @@
+@file:OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+
 package fr.echimine.live.core
 
 import kotlinx.coroutines.async
@@ -346,6 +348,23 @@ class LiveTest {
         val react = transport.socket.lastSent("react")
         assertEquals("🔥", react["emoji"]!!.jsonPrimitive.content)
         assertFalse(react.containsKey("ref"))
+        client.close()
+    }
+
+    @Test
+    fun unMessageDuChatDUnGenreInconnuNeBloquePasLeSnapshot() = runTest {
+        val client = configure()
+        val live = client.openLive("lv_8f3k2m")
+        runCurrent()
+        val snapshot = fixture("ws/server/snapshot.viewer.json").replace(
+            "\"messages\": [",
+            """"messages": [{"id":"msg_x","kind":"gift","author":{"id":"a:1","app":"a","name":"A"},"role":"viewer","at":"2026-11-06T18:05:00.000Z"},""",
+        )
+        transport.socket.push(snapshot)
+        runCurrent()
+
+        assertEquals(LiveState.Connection.Connected, live.state.value.connection)
+        assertEquals(listOf("msg_0193", "msg_0194"), live.details().messages.map { it.id })
         client.close()
     }
 }
