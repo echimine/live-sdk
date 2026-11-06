@@ -1,0 +1,11 @@
+{
+  "name": "participant-token-example",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server.mjs"
+  },
+  "dependencies": {
+    "jose": "^6.2.15"
+  }
+}

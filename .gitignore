@@ -7,6 +7,9 @@ dist
 *.log
 .DS_Store
 
+# Secrets des App membres (MEMBER_APPS_FILE) : jamais dans le dépôt
+server/member-apps.local.json
+
 # Outillage local (Claude Code / ruflo) : propre à chaque poste, jamais partagé
 .claude/
 .claude-flow/

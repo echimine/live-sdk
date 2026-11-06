@@ -50,6 +50,23 @@ jobs:
     needs: changes
     if: needs.changes.outputs.server == 'true'
     runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: postgres://live:live@localhost:5432/live
+    services:
+      # Les tests du serveur commun tournent contre un vrai Postgres (Seam 1).
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: live
+          POSTGRES_PASSWORD: live
+          POSTGRES_DB: live
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U live -d live"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4

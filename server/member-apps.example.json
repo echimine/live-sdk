@@ -1,0 +1,12 @@
+{
+  "apps": [
+    {
+      "iss": "demo-ios",
+      "secret": "secret-factice-demo-ios-ne-jamais-utiliser-en-prod"
+    },
+    {
+      "iss": "demo-android",
+      "secret": "secret-factice-demo-android-ne-jamais-utiliser-en-prod"
+    }
+  ]
+}
