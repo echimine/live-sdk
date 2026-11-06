@@ -80,10 +80,13 @@ internal fun ChatPreview(messages: List<ChatMessage>, onOpen: () -> Unit, modifi
 private fun previewLine(message: ChatMessage) = buildAnnotatedString {
     withStyle(SpanStyle(fontWeight = FontWeight.SemiBold)) { append(message.author.name) }
     append("  ")
-    append(body(message))
+    append(chatBody(message))
 }
 
-/** Le chat en feuille mi-hauteur : messages (pseudo, App d'origine, rôle) et champ de saisie. */
+/**
+ * Le chat en feuille mi-hauteur : messages (pseudo, App d'origine, rôle) et champ de saisie.
+ * [onMessageTap] (Animateurs seuls) : un message touché ouvre ses actions de modération.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun ChatSheet(
@@ -92,6 +95,7 @@ internal fun ChatSheet(
     messages: List<ChatMessage>,
     locked: Boolean,
     onDismiss: () -> Unit,
+    onMessageTap: ((ChatMessage) -> Unit)? = null,
 ) {
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(Modifier.fillMaxWidth().fillMaxHeight(0.5f).imePadding()) {
@@ -122,7 +126,11 @@ internal fun ChatSheet(
                         )
                     }
                 }
-                items(messages, key = { it.id }) { ChatMessageRow(it) }
+                items(messages, key = { it.id }) { message ->
+                    val modifier = if (onMessageTap == null) Modifier
+                    else Modifier.clickable(onClickLabel = "Modérer ce message") { onMessageTap(message) }
+                    ChatMessageRow(message, modifier)
+                }
             }
             ChatInput(live, config.chatMaxLength, locked)
         }
@@ -130,8 +138,8 @@ internal fun ChatSheet(
 }
 
 @Composable
-private fun ChatMessageRow(message: ChatMessage) {
-    Row(verticalAlignment = Alignment.Top) {
+private fun ChatMessageRow(message: ChatMessage, modifier: Modifier = Modifier) {
+    Row(modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
         Avatar(message.author, size = 32.dp)
         Spacer(Modifier.width(10.dp))
         Column(Modifier.weight(1f)) {
@@ -151,7 +159,7 @@ private fun ChatMessageRow(message: ChatMessage) {
                 )
                 roleLabel(message.role)?.let { RoleBadge(it) }
             }
-            Text(body(message), color = MaterialTheme.colorScheme.onSurface)
+            Text(chatBody(message), color = MaterialTheme.colorScheme.onSurface)
         }
     }
 }
@@ -246,7 +254,7 @@ private fun roleLabel(role: Role): String? = when (role) {
     Role.Viewer -> null
 }
 
-private fun body(message: ChatMessage): String = when (message) {
+internal fun chatBody(message: ChatMessage): String = when (message) {
     is ChatMessage.Text -> message.text
     is ChatMessage.Purchase ->
         "🛍 a acheté ${message.product.name} · ${formatPrice(message.product.price, message.product.currency)}"

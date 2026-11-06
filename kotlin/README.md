@@ -35,7 +35,7 @@ LiveSdk.configure(
 | --- | --- |
 | `LiveListScreen(onOpenLive, onLaunch)` | Lives en cours de toutes les App membres (titre, Hôte, App d'origine, Audience) + champ de lien direct |
 | `LiveLaunchScreen(onLaunched, onClose)` | Aperçu caméra, vérifications (caméra, micro, serveur), titre facultatif ≤ 80, « Lancer » |
-| `LiveScreen(liveId, onClose, productSource = …)` / `LiveScreen(live, onClose, productSource = …)` | Le Live en plein écran : mosaïque portrait jusqu'à 6 (1 plein écran, 2 empilées, 2 × 2, 2 × 3 ; Hôte en haut à gauche puis Co-hôtes par ordre de montée, chaque tuile reçue dans la qualité adaptée à sa taille), barre du haut (libellé du Live, 👁 Audience → feuille par App d'origine, ✕), bandeaux « Hôte déconnecté » / « Hôte revenu », pastille du Produit épinglé → fiche avec « Confirmer l'achat », 2 derniers messages, dock (💬 chat en feuille mi-hauteur, ❤️ Réaction rapide / appui long, 😀 toutes les Réactions, 🛍 produit, ✋ Demande de montée, ⚙️ Gestion pour les Animateurs), Réactions de tous en animation, Annonces d'achat dans le chat et en toast, refus d'une Demande de montée en toast. Les Animateurs épinglent, changent ou retirent le produit depuis 🛍. ✋ : le Spectateur demande à monter (caméra et micro autorisés d'abord) ou annule, le Co-hôte redescend. ⚙️ Gestion (badge = Demandes de montée en attente) : l'Hôte accepte ou refuse les demandes et retire les Co-hôtes, avec la limite de 5 Co-hôtes affichée. Pour l'Hôte, ✕ propose de terminer le Live puis affiche le récapitulatif de fin (Achats, Réactions, Audience max.) ; pour les autres, la fin du Live s'annonce avec « Fermer » |
+| `LiveScreen(liveId, onClose, productSource = …)` / `LiveScreen(live, onClose, productSource = …)` | Le Live en plein écran : mosaïque portrait jusqu'à 6 (1 plein écran, 2 empilées, 2 × 2, 2 × 3 ; Hôte en haut à gauche puis Co-hôtes par ordre de montée, chaque tuile reçue dans la qualité adaptée à sa taille), barre du haut (libellé du Live, 👁 Audience → feuille par App d'origine, ✕), bandeaux « Hôte déconnecté » / « Hôte revenu », pastille du Produit épinglé → fiche avec « Confirmer l'achat », 2 derniers messages, dock (💬 chat en feuille mi-hauteur, ❤️ Réaction rapide / appui long, 😀 toutes les Réactions, 🛍 produit, ✋ Demande de montée, ⚙️ Gestion pour les Animateurs), Réactions de tous en animation, Annonces d'achat dans le chat et en toast, refus d'une Demande de montée en toast. Les Animateurs épinglent, changent ou retirent le produit depuis 🛍. ✋ : le Spectateur demande à monter (caméra et micro autorisés d'abord) ou annule, le Co-hôte redescend. ⚙️ Gestion (badge = Demandes de montée en attente) : l'Hôte accepte ou refuse les demandes et retire les Co-hôtes (limite de 5 affichée), les Animateurs épinglent ou changent le produit et lèvent les Shadowbans, l'Hôte termine le Live ; dans le chat, un Animateur touche un message pour le supprimer, mettre son auteur en Shadowban ou le bannir. Pour l'Hôte, ✕ propose de terminer le Live puis affiche le récapitulatif de fin (Achats, Réactions, Audience max.) ; pour les autres, la fin du Live s'annonce avec « Fermer » |
 
 Sans les écrans, le cœur suffit : `live.sendMessage(text)` refuse un message vide ou trop long
 (`InvalidMessage`) sans rien envoyer, et verrouille le chat après un `rate_limited`
@@ -81,6 +81,20 @@ via `POST /v1/images`. Un produit invalide est refusé sans rien envoyer (`Inval
 illisible aussi (`InvalidImage`). `live.purchase(productId)` répond `ProductChanged` si l'Animateur a
 changé de produit entre-temps ; chaque Achat arrive dans le chat (`ChatMessage.Purchase`) et dans
 `live.events` (`LiveEvent.PurchaseAnnounced`).
+
+## Modération et ⚙️ Gestion
+
+Dans `LiveScreen`, les Animateurs ont ⚙️ dans le dock (badge : Demandes de montée en attente) :
+Demandes de montée à accepter ou refuser et Co-hôtes à retirer (n/5) pour l'Hôte, Produit épinglé à
+épingler ou changer, Shadowbans à lever, et « Terminer le Live » pour l'Hôte. Dans le chat, un
+Animateur touche un message pour le supprimer, mettre son auteur en Shadowban ou le bannir (après
+confirmation). L'Hôte n'est jamais modérable et seul l'Hôte modère un Co-hôte : ces actions ne sont
+pas proposées. Un Participant banni voit « Vous avez été banni de ce Live. », aussi s'il tente d'y
+revenir, et peut rejoindre d'autres Lives. Rien n'est affiché à un Participant en Shadowban.
+
+Sans les écrans : `live.deleteMessage(id)`, `live.shadowban(id)`, `live.unshadowban(id)`,
+`live.ban(id)` ; les listes sont dans `live.state.value.live?.moderation` (Animateurs seuls), le
+bannissement arrive dans `live.state` (`Connection.Banned`, ou `Connection.Failed` avec `Banned`).
 
 La navigation reste à votre app : chaque écran rend la main par ses callbacks.
 `liveIdFrom(text)` extrait l'identifiant d'un lien collé, pour brancher vos propres liens.

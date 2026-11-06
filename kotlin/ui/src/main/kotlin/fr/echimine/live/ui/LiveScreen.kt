@@ -47,6 +47,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import fr.echimine.live.core.Live
 import fr.echimine.live.core.LiveClient
+import fr.echimine.live.core.LiveErrorCode
 import fr.echimine.live.core.LiveEvent
 import fr.echimine.live.core.LiveSdk
 import fr.echimine.live.core.LiveState
@@ -108,6 +109,8 @@ public fun LiveScreen(
     var pinOpen by rememberSaveable(live.id) { mutableStateOf(false) }
     var stageOpen by rememberSaveable(live.id) { mutableStateOf(false) }
     var managementOpen by rememberSaveable(live.id) { mutableStateOf(false) }
+    /** Message touché par un Animateur ; ses actions se ferment s'il est supprimé entre-temps. */
+    var moderatedMessageId by rememberSaveable(live.id) { mutableStateOf<String?>(null) }
     val toasts = remember(live) { live.events.toasts() }
     val animator = details?.role?.isAnimator == true
     // L'Hôte termine son Live en le quittant ; les autres le quittent simplement.
@@ -173,18 +176,24 @@ public fun LiveScreen(
                         }
                         // ⚙️ Gestion : le badge compte les Demandes de montée en attente (reçues par l'Hôte seul).
                         if (animator) {
-                            BadgedDockButton(
-                                "⚙️",
-                                description = "Gestion",
-                                count = details.joinRequests.size,
-                                onClick = { managementOpen = true },
-                            )
+                            ManagementDockButton(details.joinRequests.size, onClick = { managementOpen = true })
                         }
                     }
                 }
             }
             if (chatOpen && interactive) {
-                ChatSheet(live, config, details.messages, state.chatLocked, onDismiss = { chatOpen = false })
+                ChatSheet(
+                    live,
+                    config,
+                    details.messages,
+                    state.chatLocked,
+                    onDismiss = { chatOpen = false },
+                    onMessageTap = if (animator) { message -> moderatedMessageId = message.id } else null,
+                )
+            }
+            val moderated = details?.messages?.firstOrNull { it.id == moderatedMessageId }
+            if (moderated != null && interactive && animator) {
+                MessageActionsSheet(live, details, moderated, onDismiss = { moderatedMessageId = null })
             }
             if (reactionsOpen && interactive) {
                 ReactionSheet(config.reactions, onReact = live::react, onDismiss = { reactionsOpen = false })
@@ -202,7 +211,19 @@ public fun LiveScreen(
                 StageSheet(live, details, onDismiss = { stageOpen = false })
             }
             if (managementOpen && interactive && animator) {
-                ManagementSheet(live, details, onDismiss = { managementOpen = false })
+                ManagementSheet(
+                    live,
+                    details,
+                    onPinProduct = {
+                        managementOpen = false
+                        pinOpen = true
+                    },
+                    onEndLive = {
+                        managementOpen = false
+                        endOpen = true
+                    },
+                    onDismiss = { managementOpen = false },
+                )
             }
             if (endOpen && interactive) {
                 EndLiveDialog(live, onDismiss = { endOpen = false })
@@ -318,8 +339,11 @@ private fun StatusOverlay(state: LiveState, hasVideo: Boolean, onClose: () -> Un
             else -> "Le Live est terminé."
         }
         Connection.Replaced -> "Ce Live est ouvert sur un autre appareil."
-        Connection.Banned -> "Vous avez été banni de ce Live."
-        is Connection.Failed -> "Impossible d'ouvrir ce Live : ${connection.error.message}"
+        Connection.Banned -> BANNED
+        // Banni plus tôt : le `join` est refusé, avec le même message (les autres Lives restent ouverts).
+        is Connection.Failed ->
+            if (connection.error.code == LiveErrorCode.Banned) BANNED
+            else "Impossible d'ouvrir ce Live : ${connection.error.message}"
         Connection.Closed -> null
     } ?: return
     val final = state.connection.isFinal
@@ -342,6 +366,8 @@ private fun StatusOverlay(state: LiveState, hasVideo: Boolean, onClose: () -> Un
         }
     }
 }
+
+private const val BANNED = "Vous avez été banni de ce Live."
 
 /** Bouton ✕ rond, sur fond vidéo. */
 @Composable
