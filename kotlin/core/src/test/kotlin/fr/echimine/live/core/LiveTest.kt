@@ -115,6 +115,22 @@ class LiveTest {
     }
 
     @Test
+    fun lAudienceSeDetailleParAppDOrigineDeLaPlusPresenteALaMoinsPresente() = runTest {
+        val client = configure()
+        val live = connectedLive(client)
+        transport.socket.push(
+            """{"type":"audience","total":9,"byApp":{"strava":1,"twitch":4,"instagram":2,"tiktok":2}}""",
+        )
+        runCurrent()
+
+        assertEquals(
+            listOf("twitch" to 4, "instagram" to 2, "tiktok" to 2, "strava" to 1),
+            live.details().audience.ranked,
+        )
+        client.close()
+    }
+
+    @Test
     fun unSpectateurQuiMonteDevientCoHoteEtAnimateur() = runTest {
         val client = configure()
         val live = connectedLive(client)

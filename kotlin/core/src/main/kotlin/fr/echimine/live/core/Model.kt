@@ -88,7 +88,11 @@ public sealed interface ChatMessage {
 public data class Audience(
     val total: Int,
     val byApp: Map<String, Int>,
-)
+) {
+    /** [byApp] de l'App d'origine la plus présente à la moins présente, puis par nom. */
+    public val ranked: List<Pair<String, Int>>
+        get() = byApp.toList().sortedWith(compareByDescending<Pair<String, Int>> { it.second }.thenBy { it.first })
+}
 
 /** Un Live en cours, tel que listé. */
 @Serializable
