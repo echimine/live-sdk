@@ -24,7 +24,7 @@ await LiveSDK.shared.configure(serverURL: URL(string: "https://live.echimine.fr"
 | --- | --- |
 | `LiveListScreen(onOpenLive:onLaunch:)` | Lives en cours de toutes les App membres (titre, Hôte, App d'origine, Audience) + champ de lien direct |
 | `LiveLaunchScreen(onLaunched:onClose:)` | Aperçu caméra, vérifications (caméra, micro, serveur), titre facultatif ≤ 80, « Lancer » |
-| `LiveScreen(liveId:onClose:)` / `LiveScreen(session:onClose:)` | Le Live en plein écran : vidéo de l'Hôte, barre du haut (libellé du Live, Audience par App d’origine, ✕), 2 derniers messages, dock (💬 chat en feuille mi-hauteur, ❤️ Réaction rapide / appui long, 😀 toutes les Réactions), Réactions de tous en animation |
+| `LiveScreen(liveId:onClose:)` / `LiveScreen(session:onClose:)` | Le Live en plein écran : mosaïque de l'Hôte et des Co-hôtes, barre du haut (libellé du Live, Audience par App d’origine, ✕), 2 derniers messages, dock (💬 chat en feuille mi-hauteur, ❤️ Réaction rapide / appui long, 😀 toutes les Réactions), Réactions de tous en animation |
 
 La navigation reste à votre app : chaque écran rend la main par ses callbacks.
 `LiveLink.liveId(from:)` extrait l'identifiant d'un lien collé, pour brancher vos propres liens.
@@ -75,6 +75,24 @@ L’Hôte confirme « Terminer le Live ». Une erreur permet de réessayer ; un 
 
 `startLive(title:)` utilise le lancement idempotent du serveur : un Live en cours est rendu avec son titre initial (HTTP 200), un nouveau Live avec HTTP 201. Les deux réponses sont acceptées.
 
+## Co-hôtes et mosaïque
+
+La vidéo est une mosaïque portrait de 6 personnes au plus (`StageMosaic`) : 1 plein écran, 2 empilées, 2 × 2, puis 2 × 3 ; l’Hôte en haut à gauche, puis les Co-hôtes par ordre de montée (`session.stage`). La room LiveKit est en simulcast et `adaptiveStream` : chaque tuile reçoit la qualité de sa taille.
+
+- Spectateur : ✋ demande à monter (caméra et micro autorisés d’abord), puis l’annule. `session.joinRequestPending` suit la demande ; le serveur ne signale pas un refus, et une reconnexion perd la demande.
+- Acceptation : `roleChanged` publie caméra et micro dans la room déjà connectée, sans nouveau jeton ni reconnexion. Redescendre (soi-même ou retiré par l’Hôte) coupe la publication ; on reste dans le Live.
+- Hôte : ⚙️ Gestion porte le nombre de Demandes de montée en attente, permet d’accepter, refuser et retirer un Co-hôte, avec le compte `n/5` (`LiveSession.maxCohosts`) ; `cohost_limit` est affiché.
+- Co-hôte : « Redescendre », après confirmation.
+
+## Modération et ⚙️ Gestion
+
+La modération ne vaut que pour le Live en cours. `session.moderationActions(for:)` rend ce qu’un Animateur peut faire sur un message, selon les règles du serveur : rien pour un Spectateur ; seulement supprimer un message de l’Hôte, de soi-même, d’un Participant déjà banni, ou d’un Co-hôte quand on est Co-hôte (seul l’Hôte modère un Co-hôte) ; sinon supprimer, Shadowban (ou « Lever le Shadowban ») et Bannissement. Les commandes passent par `session.send(.deleteMessage / .shadowban / .unshadowban / .ban)`.
+
+- Écrans : toucher un message (chat ou deux derniers messages) ouvre ces actions ; une erreur (`not_animator`, `not_found`) est affichée.
+- ⚙️ Gestion, ouverte à l’Hôte et aux Co-hôtes : Demandes de montée et Co-hôtes (Hôte), épingler ou changer le Produit épinglé, Shadowbans à lever, « Terminer le Live » (Hôte).
+- `session.moderation` (listes servies aux seuls Animateurs) ne contient jamais le Participant lui-même et redevient `nil` quand il redescend Spectateur : rien ne révèle un Shadowban. Un Co-hôte monté en cours de Live reçoit les listes au prochain changement.
+- Participant banni : `status == .banned`, l’écran affiche « Vous avez été exclu de ce Live » et un bouton Fermer ; la session ne se reconnecte pas, d’autres Lives restent ouverts à lui.
+
 ## Vérification manuelle (iOS 17+)
 
 La spécification #19 prévoit une vérification manuelle des écrans, sans tests UI automatisés en v1. Avec le serveur local et deux Participants :
@@ -85,5 +103,23 @@ La spécification #19 prévoit une vérification manuelle des écrans, sans test
 4. Depuis l’Hôte, annuler puis confirmer la fin. Vérifier le récapitulatif et sa fermeture ; le Spectateur doit voir la fin sans récapitulatif. Répéter avec la feuille Audience ouverte à la réception de la fin.
 5. Refaire avec l’Hôte absent plus de 60 secondes : vérifier le motif de fin chez le Spectateur. Vérifier aussi le remplacement de connexion et le Bannissement.
 6. Appeler deux fois `startLive` depuis le même Hôte : vérifier le même identifiant et le titre initial. Vérifier les commandes refusées et la possibilité de réessayer.
+7. Co-hôtes : depuis un Spectateur, ✋ puis annuler ; vérifier le badge de ⚙️ chez l’Hôte. Redemander, accepter : la caméra du Co-hôte apparaît sans reconnexion, chez tous, à la bonne place. Monter jusqu’à 6 personnes (1, 2, 2 × 2, 2 × 3), tenter une 6e acceptation (`cohost_limit`), retirer un Co-hôte, puis faire redescendre un Co-hôte de lui-même.
+8. Modération : depuis l’Hôte, toucher un message d’un Spectateur, le supprimer (disparaît chez tous), mettre son auteur en Shadowban (ses messages ne sont plus vus que de lui, et rien ne change de son côté), lever le Shadowban dans ⚙️ Gestion, puis le bannir (exclu immédiatement avec un message, il rejoint un autre Live sans souci). Depuis un Co-hôte, vérifier que le message d’un autre Co-hôte ne propose que la suppression ; épingler puis changer le produit depuis ⚙️ Gestion.
 
 Validation automatisée : `swift test`, puis `xcodebuild -scheme LiveSDK-Package -destination 'generic/platform=iOS Simulator' -quiet build`.
+
+### Produits et achats
+
+Le cœur expose `session.pinProduct(name:price:currency:image:)`, `unpinProduct()` et
+`purchase(productId:)`. Le prix est exprimé en centimes. `ProductImage.url` transmet
+une URL HTTPS de catalogue ; `.data` réduit et oriente la photo à 1 024 px maximum,
+puis envoie un JPEG authentifié à `POST /v1/images` avant la commande d’épinglage.
+Un échec d’envoi ne remplace pas le produit existant.
+
+Les écrans acceptent une source facultative via `.productSource(MyProductSource())`.
+Implémentez `ProductSource.searchProducts(matching:)` et renvoyez des
+`ProductSuggestion` (initialiseur public). Les recherches sont différées de 300 ms,
+annulées à la frappe suivante et limitées à 5 secondes et 20 résultats valides.
+La saisie manuelle reste accessible en cas d’erreur. La fiche conserve l’identifiant
+présenté lors de son ouverture : `product_changed` invite à rouvrir le nouveau produit.
+Les achats sont simulés ; annonces et prix utilisent la locale du téléphone.

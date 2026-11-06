@@ -50,6 +50,7 @@ private struct RootView: View {
             }
         }
         .liveTheme(LiveTheme(label: "Crosslive"))
+        .productSource(DemoProductSource())
         .task {
             if !pseudo.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { await configure() }
         }
@@ -68,6 +69,7 @@ private struct RootView: View {
                 }
             }
             .liveTheme(LiveTheme(label: "Crosslive"))
+        .productSource(DemoProductSource())
         }
     }
 
@@ -100,5 +102,15 @@ private struct PseudoForm: View {
                 .disabled(pseudo.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
         .padding(24)
+    }
+}
+
+private struct DemoProductSource: ProductSource {
+    func searchProducts(matching query: String) async throws -> [ProductSuggestion] {
+        try await Task.sleep(for: .milliseconds(100))
+        return [
+            ProductSuggestion(id: "shirt", name: "T-shirt Crosslive", priceCents: 1990, currency: "EUR"),
+            ProductSuggestion(id: "mug", name: "Mug Crosslive", priceCents: 1250, currency: "EUR")
+        ].filter { $0.name.localizedCaseInsensitiveContains(query) }
     }
 }

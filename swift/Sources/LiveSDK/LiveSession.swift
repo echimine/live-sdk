@@ -22,6 +22,9 @@ public enum LiveStatus: Sendable, Hashable {
 
 public enum LiveEvent: Sendable, Hashable {
     case reactions([String: Int])
+    case purchase(ChatMessage)
+    /// Spectateur : l'Hôte a refusé ma Demande de montée (`joinRequestPending` repasse à `false`).
+    case joinDeclined
 }
 
 @MainActor
@@ -41,8 +44,19 @@ public final class LiveSession {
     public private(set) var reactionsTotal = 0
     public private(set) var messages: [ChatMessage] = []
     public private(set) var joinRequests: [Participant] = []
+    /// Ma Demande de montée attend la réponse de l'Hôte : effacée à la montée, au refus (`joinDeclined`,
+    /// annoncé par `LiveEvent.joinDeclined`) ou à une reconnexion.
+    public private(set) var joinRequestPending = false
     public private(set) var moderation: Moderation?
     public private(set) var chatLocked = false
+
+    /// Limite fixée par le serveur : une 6e acceptation est refusée (`cohost_limit`).
+    public nonisolated static let maxCohosts = 5
+
+    /// À l'écran, dans l'ordre de la mosaïque : l'Hôte, puis les Co-hôtes par ordre de montée.
+    public var stage: [Participant] {
+        (host.map { [$0] } ?? []) + cohosts
+    }
 
     private let url: URL
     private let tokenProvider: TokenProvider
@@ -61,6 +75,7 @@ public final class LiveSession {
     private let media: any MediaConnector
     private var outbox: Task<Void, Never>?
     private var pending: [String: CheckedContinuation<Result<Void, LiveCommandError>, Never>] = [:]
+    private var sentCommands: [String: LiveCommand] = [:]
 
     public let config: LiveConfig
 
@@ -85,6 +100,23 @@ public final class LiveSession {
         guard !status.isFinal else { return }
         task?.cancel()
         await finish(.left)
+    }
+
+    func uploadProductImage(_ data: Data) async throws -> URL {
+        guard status == .connected else { throw LiveCommandError(code: .disconnected, message: "") }
+        let encoded = try await Task.detached { try ProductImageEncoder.jpeg(data) }.value
+        guard encoded.count <= config.images.maxBytes, config.images.formats.contains("image/jpeg") else { throw ProductImageEncoder.invalidImage }
+        let token = try await tokenProvider()
+        var components = URLComponents(url: url, resolvingAgainstBaseURL: false)!
+        components.scheme = components.scheme == "ws" ? "http" : "https"
+        components.path = url.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().appending(path: "images").path
+        components.query = nil
+        let response = try await environment.http.send(HTTPRequest(method: "POST", url: components.url!, headers: ["Authorization": "Bearer \(token)", "Content-Type": "image/jpeg"], body: encoded))
+        guard (200..<300).contains(response.status) else {
+            let detail = try? WireCoding.decode(HTTPErrorBody.self, from: response.body).error
+            throw LiveSDKError.server(code: detail?.code ?? "http_\(response.status)", message: detail?.message ?? "Envoi de l’image impossible.")
+        }
+        return try WireCoding.decode(ImagesUploadResponse.self, from: response.body).url
     }
 
     public func sendMessage(_ text: String) async throws(LiveCommandError) {
@@ -136,11 +168,35 @@ public final class LiveSession {
         }
         let result = await withCheckedContinuation { continuation in
             pending[ref] = continuation
+            sentCommands[ref] = command
             enqueue(text, on: connection) { [weak self] in
                 self?.resolve(ref, with: .failure(LiveCommandError(code: .disconnected, message: "")))
             }
         }
         try result.get()
+    }
+
+    private func applyAcknowledged(_ command: LiveCommand) {
+        switch command {
+        case .requestToJoin: joinRequestPending = true
+        case .cancelJoinRequest: joinRequestPending = false
+        // Le serveur n'annonce pas un refus : la demande disparaît à l'ack.
+        case .declineJoin(let participantId): joinRequests.removeAll { $0.id == participantId }
+        default: break
+        }
+    }
+
+    /// Les actions permises sur ce message à l'instant : aucune pour un Spectateur.
+    public func moderationActions(for message: ChatMessage) -> [ModerationAction] {
+        guard role == .host || role == .cohost else { return [] }
+        let author = message.author.id
+        // Le serveur ne laisse modérer ni l'Hôte, ni un Co-hôte sauf par l'Hôte (`not_animator`).
+        let protected = author == host?.id || author == you?.id
+            || (role != .host && cohosts.contains { $0.id == author })
+        let banned = moderation?.banned.contains { $0.id == author } == true
+        if protected || banned { return [.deleteMessage] }
+        let shadowbanned = moderation?.shadowbanned.contains { $0.id == author } == true
+        return [.deleteMessage, shadowbanned ? .unshadowban : .shadowban, .ban]
     }
 
     public func react(_ emoji: String) {
@@ -205,6 +261,9 @@ public final class LiveSession {
     }
 
     private func resolve(_ ref: String, with result: Result<Void, LiveCommandError>) {
+        let command = sentCommands.removeValue(forKey: ref)
+        // Appliqué à la réception de l'ack, dans l'ordre des messages du serveur.
+        if case .success = result, let command { applyAcknowledged(command) }
         pending.removeValue(forKey: ref)?.resume(returning: result)
     }
 
@@ -269,6 +328,7 @@ public final class LiveSession {
     private func failPendingCommands() {
         let waiting = pending.values
         pending = [:]
+        sentCommands = [:]
         waiting.forEach { $0.resume(returning: .failure(LiveCommandError(code: .disconnected, message: ""))) }
     }
 
@@ -301,6 +361,7 @@ public final class LiveSession {
         case .audience(let update):
             audience = update
         case .chatMessage(let message):
+            if case .purchase = message.content, !messages.contains(where: { $0.id == message.id }) { emit(.purchase(message)) }
             messages.append(message)
         case .messageDeleted(let messageId):
             messages.removeAll { $0.id == messageId }
@@ -318,12 +379,16 @@ public final class LiveSession {
             hostConnected = true
         case .roleChanged(let change):
             apply(change)
+            await syncPublication()
         case .joinRequested(let participant):
             joinRequests = joinRequests.filter { $0.id != participant.id } + [participant]
         case .joinRequestCancelled(let participantId):
             joinRequests.removeAll { $0.id == participantId }
+        case .joinDeclined:
+            joinRequestPending = false
+            emit(.joinDeclined)
         case .moderationChanged(let lists):
-            moderation = lists
+            moderation = withoutYou(lists)
         default:
             break
         }
@@ -350,11 +415,22 @@ public final class LiveSession {
                 return
             }
         }
-        if role == .host && !mediaPublished {
-            mediaPublished = (try? await media.publishCameraAndMicrophone()) != nil
-        }
+        await syncPublication()
         if status.isFinal {
             await media.disconnect()
+        }
+    }
+
+    /// Les Animateurs publient caméra et micro dans la room déjà connectée : pas de nouveau jeton.
+    private func syncPublication() async {
+        guard mediaConnected, !status.isFinal else { return }
+        let onStage = role == .host || role == .cohost
+        if onStage && !mediaPublished {
+            mediaPublished = (try? await media.publishCameraAndMicrophone()) != nil
+        } else if !onStage && mediaPublished {
+            // Le serveur coupe aussi la permission : un échec ici laisse seulement les pistes locales.
+            try? await media.unpublishCameraAndMicrophone()
+            mediaPublished = false
         }
     }
 
@@ -372,8 +448,12 @@ public final class LiveSession {
     private func apply(_ change: RoleChanged) {
         let others = cohosts.filter { $0.id != change.participant.id }
         cohosts = change.role == .cohost ? others + [change.participant] : others
+        joinRequests.removeAll { $0.id == change.participant.id }
         if change.participant.id == you?.id {
             role = change.role
+            joinRequestPending = false
+            // Les listes de modération sont réservées aux Animateurs, comme dans le `snapshot`.
+            if change.role == .viewer { moderation = nil }
         }
     }
 
@@ -390,7 +470,18 @@ public final class LiveSession {
         reactionsTotal = snapshot.reactionsTotal
         messages = snapshot.messages
         joinRequests = snapshot.joinRequests ?? []
-        moderation = snapshot.moderation
+        // Les Demandes de montée en attente ne survivent pas à la fermeture du socket.
+        joinRequestPending = false
+        moderation = withoutYou(snapshot.moderation)
+    }
+
+    /// Un Animateur mis en Shadowban ne doit pas l'apprendre : il n'apparaît jamais dans ses propres listes.
+    private func withoutYou(_ lists: Moderation?) -> Moderation? {
+        guard let lists, let you else { return lists }
+        return Moderation(
+            shadowbanned: lists.shadowbanned.filter { $0.id != you.id },
+            banned: lists.banned.filter { $0.id != you.id }
+        )
     }
 }
 
