@@ -1,5 +1,6 @@
 import { and, desc, eq, isNull } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
+import { participantColumns, toParticipant } from "./db/participant.js";
 import { postgresCode } from "./db/postgres-error.js";
 import { chatMessages, products } from "./db/schema.js";
 import type { ChatMessage } from "./protocol/index.js";
@@ -18,12 +19,7 @@ export interface RecentMessage {
 function toMessage(row: Row, product: ProductRow | null): ChatMessage | undefined {
   const base = {
     id: row.id,
-    author: {
-      id: row.authorId,
-      app: row.authorApp,
-      name: row.authorName,
-      ...(row.authorPicture !== null && { picture: row.authorPicture }),
-    },
+    author: toParticipant(row, "author"),
     role: row.authorRole,
     at: row.sentAt.toISOString(),
   };
@@ -57,10 +53,7 @@ export class ChatStore {
     await withoutChatText("écriture du message", () => this.db.insert(chatMessages).values({
       id: message.id,
       liveId,
-      authorId: message.author.id,
-      authorApp: message.author.app,
-      authorName: message.author.name,
-      authorPicture: message.author.picture ?? null,
+      ...participantColumns(message.author, "author"),
       authorRole: message.role,
       kind: message.kind,
       text: message.text,

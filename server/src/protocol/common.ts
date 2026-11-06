@@ -6,28 +6,41 @@ export const Timestamp = z.iso.datetime();
 /** URL https, seule forme acceptée pour un avatar ou une image. */
 export const HttpsUrl = z.url({ protocol: /^https$/ });
 
-const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+const graphemes = new Intl.Segmenter("fr", { granularity: "grapheme" });
 
-/** Nombre de caractères visibles (graphèmes) : un emoji composé compte pour un. */
-export function graphemeCount(text: string): number {
-  let count = 0;
-  for (const _ of graphemes.segment(text)) count++;
-  return count;
+/** Graphème sans rien de visible : uniquement des caractères de format (espace de largeur nulle, marques bidi…). */
+const INVISIBLE = /^\p{Cf}+$/u;
+/** Graphème qui affiche quelque chose. */
+const VISIBLE = /[^\p{Cf}\p{White_Space}]/u;
+
+/**
+ * Texte prêt à partir sur le fil (pseudo, titre, message du chat, nom de
+ * produit) : sans espaces autour, de 1 à `max` caractères visibles (graphèmes :
+ * un emoji composé compte pour un, un caractère de format ne compte pas), avec
+ * au moins un caractère qui s'affiche. `undefined` sinon.
+ */
+export function visibleText(text: string, max: number): string | undefined {
+  const trimmed = text.trim();
+  let length = 0;
+  let showsSomething = false;
+  for (const { segment } of graphemes.segment(trimmed)) {
+    if (INVISIBLE.test(segment)) continue;
+    if (++length > max) return undefined;
+    showsSomething ||= VISIBLE.test(segment);
+  }
+  return showsSomething ? trimmed : undefined;
 }
 
-/** Texte de 1 à `max` caractères visibles, après `trim`. */
-function visibleText(max: number) {
+/** Schéma d'un texte de 1 à `max` caractères visibles, après `trim`. */
+function visibleTextSchema(max: number) {
   return z
     .string()
     .trim()
-    .refine((text) => {
-      const count = graphemeCount(text);
-      return count >= 1 && count <= max;
-    }, `1 à ${max} caractères visibles`);
+    .refine((text) => visibleText(text, max) !== undefined, `1 à ${max} caractères visibles`);
 }
 
 /** Pseudo d'un Participant : 1 à 30 caractères visibles, après `trim`. */
-export const ParticipantName = visibleText(30);
+export const ParticipantName = visibleTextSchema(30);
 
 /**
  * Participant tel qu'il apparaît sur le fil. `id` est opaque et attribué par le
@@ -47,13 +60,21 @@ export const Role = z.enum(["host", "cohost", "viewer"]);
 export type Role = z.infer<typeof Role>;
 
 /** Titre facultatif d'un Live : 1 à 80 caractères visibles, après `trim`. */
-export const LiveTitle = visibleText(80);
+export const LiveTitle = visibleTextSchema(80);
 
-/** Nom d'un Produit épinglé (`config.product.nameMaxLength`). */
-export const ProductName = z.string().min(1).max(80);
+/** Nom d'un Produit épinglé : sa longueur maximale vient de `config.product.nameMaxLength`, vérifiée par le serveur. */
+export const ProductName = z.string().min(1);
 
 /** Prix en centimes, entre 0 et 1 000 000. */
 export const Price = z.int().min(0).max(1_000_000);
 
 /** Code de devise ISO 4217 en majuscules. */
 export const Currency = z.string().regex(/^[A-Z]{3}$/);
+
+/** Récapitulatif de fin d'un Live, pour son Hôte seul (`liveEnded` et `GET /v1/lives/{id}/summary`). */
+export const EndSummary = z.object({
+  purchases: z.int().min(0),
+  reactions: z.int().min(0),
+  peakAudience: z.int().min(0),
+});
+export type EndSummary = z.infer<typeof EndSummary>;

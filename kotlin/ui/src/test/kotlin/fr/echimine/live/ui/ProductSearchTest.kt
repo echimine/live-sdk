@@ -87,6 +87,27 @@ class ProductSearchTest {
     }
 
     @Test
+    fun lesSuggestionsSansIdSontEcarteesEtLesDoublonsDedoublonnes() = runTest {
+        val search = search {
+            listOf(
+                suggestion("", name = "Sans identifiant"),
+                suggestion("   ", name = "Identifiant blanc"),
+                suggestion("p1", name = "Première"),
+                suggestion("p2"),
+                suggestion("p1", name = "Doublon"),
+                suggestion("p3"),
+            )
+        }
+
+        search.onQueryChange("p")
+        advanceTimeBy(301)
+
+        val results = (search.state.value as ProductSearchState.Results).suggestions
+        assertEquals(listOf("p1", "p2", "p3"), results.map { it.id })
+        assertEquals("Première", results.first().name) // la première occurrence d'un `id` l'emporte
+    }
+
+    @Test
     fun unCatalogueEnPanneOuTropLentEstIndisponiblePuisReessayable() = runTest {
         var failing = true
         val search = search { query ->

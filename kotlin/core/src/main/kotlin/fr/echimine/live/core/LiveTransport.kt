@@ -59,7 +59,15 @@ public interface WebSocketConnection {
     public fun close()
 }
 
-/** Transport de production, sur OkHttp. */
+/**
+ * Transport de production, sur OkHttp. Un seul client pour HTTP et WebSocket :
+ * - `readTimeout` ne borne que les requêtes HTTP et la poignée de main du WebSocket. Une fois le
+ *   WebSocket ouvert, OkHttp détache la socket de tout délai de lecture
+ *   (`RealConnection.newWebSocketStreams` : `socket.soTimeout = 0`, « web sockets are never bound to
+ *   a timeout », vérifié sur la 4.12.0) : un Live silencieux plus de 15 s n'est pas coupé.
+ * - `pingInterval` seul surveille le WebSocket : un ping sans pong dans l'intervalle le ferme,
+ *   et la reconnexion de [Live] prend le relais.
+ */
 internal class OkHttpLiveTransport(
     private val client: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS)

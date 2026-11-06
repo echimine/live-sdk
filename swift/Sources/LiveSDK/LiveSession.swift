@@ -49,6 +49,8 @@ public final class LiveSession {
     public private(set) var joinRequestPending = false
     public private(set) var moderation: Moderation?
     public private(set) var chatLocked = false
+    /// Fin du verrou du chat posé après un `rate_limited` (`nil` sans verrou) ; voir aussi `chatLockRemaining`.
+    public private(set) var chatUnlockAt: Date?
 
     /// Limite fixée par le serveur : une 6e acceptation est refusée (`cohost_limit`).
     public nonisolated static let maxCohosts = 5
@@ -70,8 +72,9 @@ public final class LiveSession {
     private var eventContinuations: [UUID: AsyncStream<LiveEvent>.Continuation] = [:]
     private var ownReactionsSinceLastWindow: [String: Int] = [:]
     private var ownReactionsCarried: [String: Int] = [:]
-    private var chatUnlockAt: Date?
     private var chatUnlockTask: Task<Void, Never>?
+    /// Un `invalid_token` au `join` est retenté une fois avec un jeton frais avant d'échouer.
+    private var retriedInvalidToken = false
     private let media: any MediaConnector
     private var outbox: Task<Void, Never>?
     private var pending: [String: CheckedContinuation<Result<Void, LiveCommandError>, Never>] = [:]
@@ -102,21 +105,56 @@ public final class LiveSession {
         await finish(.left)
     }
 
-    func uploadProductImage(_ data: Data) async throws -> URL {
+    /// Réduit la photo (1 024 px au plus, JPEG) puis l'envoie à `POST /v1/images` ; rend son URL.
+    func uploadProductImage(_ data: Data) async throws(LiveCommandError) -> URL {
         guard status == .connected else { throw LiveCommandError(code: .disconnected, message: "") }
-        let encoded = try await Task.detached { try ProductImageEncoder.jpeg(data) }.value
-        guard encoded.count <= config.images.maxBytes, config.images.formats.contains("image/jpeg") else { throw ProductImageEncoder.invalidImage }
-        let token = try await tokenProvider()
+        let encoded = try await Task.detached { Result { () throws(LiveCommandError) in try ProductImageEncoder.jpeg(data) } }.value.get()
+        guard config.images.formats.contains("image/jpeg") else {
+            throw LiveCommandError(code: .unsupportedMediaType, message: "Formats acceptés : \(config.images.formats.joined(separator: ", ")).")
+        }
+        guard encoded.count <= config.images.maxBytes else {
+            throw LiveCommandError(code: .payloadTooLarge, message: "Image de plus de \(config.images.maxBytes / (1024 * 1024)) Mo.")
+        }
+        let token: String
+        do { token = try await tokenProvider() } catch {
+            LiveLog.http.error("Envoi de l’image impossible : jeton de Participant indisponible")
+            throw LiveCommandError(code: .tokenUnavailable, message: "Impossible d’obtenir votre identité auprès de l’app.")
+        }
         var components = URLComponents(url: url, resolvingAgainstBaseURL: false)!
         components.scheme = components.scheme == "ws" ? "http" : "https"
         components.path = url.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().appending(path: "images").path
         components.query = nil
-        let response = try await environment.http.send(HTTPRequest(method: "POST", url: components.url!, headers: ["Authorization": "Bearer \(token)", "Content-Type": "image/jpeg"], body: encoded))
-        guard (200..<300).contains(response.status) else {
-            let detail = try? WireCoding.decode(HTTPErrorBody.self, from: response.body).error
-            throw LiveSDKError.server(code: detail?.code ?? "http_\(response.status)", message: detail?.message ?? "Envoi de l’image impossible.")
+        let request = HTTPRequest(method: "POST", url: components.url!, headers: ["Authorization": "Bearer \(token)", "Content-Type": "image/jpeg"], body: encoded)
+        let response: HTTPResponse
+        do { response = try await environment.http.send(request) } catch {
+            LiveLog.http.error("Envoi de l’image impossible : serveur injoignable")
+            throw LiveCommandError(code: .network, message: "Serveur injoignable. Vérifiez votre connexion.")
         }
-        return try WireCoding.decode(ImagesUploadResponse.self, from: response.body).url
+        guard (200..<300).contains(response.status) else {
+            LiveLog.http.error("Envoi de l’image refusé : HTTP \(response.status, privacy: .public)")
+            throw Self.uploadError(response)
+        }
+        guard let uploaded = try? WireCoding.decode(ImagesUploadResponse.self, from: response.body) else {
+            throw LiveCommandError(code: .network, message: "Réponse du serveur illisible.")
+        }
+        return uploaded.url
+    }
+
+    /// Code fermé d'un refus HTTP : celui du corps s'il est connu, sinon déduit du statut (comme le cœur Kotlin).
+    private static func uploadError(_ response: HTTPResponse) -> LiveCommandError {
+        let detail = try? WireCoding.decode(HTTPErrorBody.self, from: response.body).error
+        let fromBody = detail.flatMap { LiveErrorCode(rawValue: $0.code) }
+        let code: LiveErrorCode = if let fromBody, fromBody != .unknown { fromBody } else {
+            switch response.status {
+            case 401: .invalidToken
+            case 404: .notFound
+            case 413: .payloadTooLarge
+            case 415: .unsupportedMediaType
+            case 429: .rateLimited
+            default: .network
+            }
+        }
+        return LiveCommandError(code: code, message: detail?.message ?? "Envoi de l’image impossible.")
     }
 
     public func sendMessage(_ text: String) async throws(LiveCommandError) {
@@ -140,7 +178,8 @@ public final class LiveSession {
 
     private static let defaultChatLock = Duration.seconds(5)
 
-    private var chatLockRemaining: Duration? {
+    /// Temps restant du verrou du chat, `nil` quand le chat est ouvert.
+    public var chatLockRemaining: Duration? {
         guard let chatUnlockAt else { return nil }
         let milliseconds = Int((chatUnlockAt.timeIntervalSince(environment.clock.now) * 1000).rounded())
         return milliseconds > 0 ? .milliseconds(milliseconds) : nil
@@ -279,7 +318,9 @@ public final class LiveSession {
     private func run() async {
         while !status.isFinal && !Task.isCancelled {
             if failures > 0 {
-                try? await environment.clock.sleep(for: Self.backoff(afterFailures: failures))
+                let delay = Self.backoff(afterFailures: failures)
+                LiveLog.session.info("Reconnexion : tentative \(self.failures, privacy: .public) dans \(delay.components.seconds, privacy: .public) s")
+                try? await environment.clock.sleep(for: delay)
                 if status.isFinal || Task.isCancelled { return }
             }
             if let connection = await open() {
@@ -287,6 +328,7 @@ public final class LiveSession {
             }
             if status.isFinal { return }
             failures += 1
+            LiveLog.session.notice("Connexion perdue")
             dropConnection()
         }
     }
@@ -296,22 +338,33 @@ public final class LiveSession {
     }
 
     private func open() async -> (any WebSocketConnection)? {
-        guard let token = try? await tokenProvider(), !status.isFinal,
-              let join = try? Self.encode(.join(token: token)),
-              let connection = try? await environment.webSocket.connect(to: url)
-        else { return nil }
+        guard let token = try? await tokenProvider(), !status.isFinal else {
+            if !status.isFinal { LiveLog.session.error("Connexion impossible : jeton de Participant indisponible") }
+            return nil
+        }
+        guard let join = try? Self.encode(.join(token: token)) else { return nil }
+        guard let connection = try? await environment.webSocket.connect(to: url) else {
+            LiveLog.session.error("Connexion impossible : serveur injoignable")
+            return nil
+        }
         guard !status.isFinal else {
             connection.close()
             return nil
         }
-        do { try await connection.send(join) } catch { return nil }
+        do { try await connection.send(join) } catch {
+            LiveLog.session.error("Connexion impossible : envoi du join refusé")
+            return nil
+        }
         self.connection = connection
         return connection
     }
 
     private func listen(on connection: any WebSocketConnection) async {
         while !status.isFinal, let text = try? await connection.receive() {
-            guard let message = try? WireCoding.decode(ServerMessage.self, from: Data(text.utf8)) else { continue }
+            guard let message = try? WireCoding.decode(ServerMessage.self, from: Data(text.utf8)) else {
+                LiveLog.session.notice("Message serveur illisible ignoré")
+                continue
+            }
             await handle(message)
         }
     }
@@ -337,7 +390,9 @@ public final class LiveSession {
         case .snapshot(let snapshot):
             apply(snapshot)
             failures = 0
+            retriedInvalidToken = false
             status = .connected
+            LiveLog.session.info("Live rejoint : rôle \(snapshot.role.rawValue, privacy: .public)")
             await connectMedia(snapshot.livekit)
         case .ack(let ref):
             resolve(ref, with: .success(()))
@@ -355,13 +410,16 @@ public final class LiveSession {
         case .liveEnded(let ended):
             await finish(.ended(ended.reason, ended.summary))
         case .replaced:
+            LiveLog.session.notice("Connexion remplacée : ce Live est ouvert sur un autre appareil")
             await finish(.replaced)
         case .banned:
             await finish(.banned)
         case .audience(let update):
             audience = update
         case .chatMessage(let message):
-            if case .purchase = message.content, !messages.contains(where: { $0.id == message.id }) { emit(.purchase(message)) }
+            // Le serveur peut renvoyer un message déjà reçu (rattrapage) : un seul exemplaire par `id`.
+            guard !messages.contains(where: { $0.id == message.id }) else { break }
+            if case .purchase = message.content { emit(.purchase(message)) }
             messages.append(message)
         case .messageDeleted(let messageId):
             messages.removeAll { $0.id == messageId }
@@ -389,17 +447,24 @@ public final class LiveSession {
             emit(.joinDeclined)
         case .moderationChanged(let lists):
             moderation = withoutYou(lists)
-        default:
-            break
+        case .unknown(let type):
+            LiveLog.session.info("Message serveur ignoré : type \(type, privacy: .public)")
         }
     }
 
     private func refuseJoin(_ code: LiveErrorCode) async {
         guard status != .connected else { return }
+        LiveLog.session.error("Join refusé : \(code.rawValue, privacy: .public)")
         switch code {
         case .banned:
             await finish(.banned)
-        case .liveNotFound, .invalidToken:
+        case .liveNotFound:
+            await finish(.failed(code))
+        case .invalidToken where !retriedInvalidToken:
+            // Jeton périmé entre sa signature et le join : une seule nouvelle chance, avec un jeton frais.
+            retriedInvalidToken = true
+            connection?.close()
+        case .invalidToken:
             await finish(.failed(code))
         default:
             connection?.close()
@@ -411,7 +476,9 @@ public final class LiveSession {
             do {
                 try await media.connect(url: livekit.url, token: livekit.token)
                 mediaConnected = true
+                LiveLog.media.info("Room média connectée")
             } catch {
+                LiveLog.media.error("Connexion à la room média impossible")
                 return
             }
         }
@@ -426,10 +493,17 @@ public final class LiveSession {
         guard mediaConnected, !status.isFinal else { return }
         let onStage = role == .host || role == .cohost
         if onStage && !mediaPublished {
-            mediaPublished = (try? await media.publishCameraAndMicrophone()) != nil
+            do {
+                try await media.publishCameraAndMicrophone()
+                mediaPublished = true
+            } catch {
+                LiveLog.media.error("Publication de la caméra et du micro impossible")
+            }
         } else if !onStage && mediaPublished {
             // Le serveur coupe aussi la permission : un échec ici laisse seulement les pistes locales.
-            try? await media.unpublishCameraAndMicrophone()
+            do { try await media.unpublishCameraAndMicrophone() } catch {
+                LiveLog.media.error("Arrêt de la publication impossible")
+            }
             mediaPublished = false
         }
     }

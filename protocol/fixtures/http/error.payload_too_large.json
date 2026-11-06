@@ -1,0 +1,6 @@
+{
+  "error": {
+    "code": "payload_too_large",
+    "message": "Image de plus de 10 Mo."
+  }
+}

@@ -51,10 +51,3 @@ internal fun Avatar(participant: Participant, modifier: Modifier = Modifier, siz
         }
     }
 }
-
-/** Premier caractère visible du pseudo, en majuscule ; un emoji composé reste entier. */
-internal fun initialOf(name: String): String {
-    val trimmed = name.trim()
-    if (trimmed.isEmpty()) return "?"
-    return trimmed.substring(0, graphemes(trimmed).next()).uppercase()
-}

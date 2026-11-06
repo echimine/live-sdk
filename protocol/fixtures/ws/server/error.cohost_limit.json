@@ -1,0 +1,6 @@
+{
+  "type": "error",
+  "ref": "c5",
+  "code": "cohost_limit",
+  "message": "Déjà 5 Co-hôtes à l'écran."
+}

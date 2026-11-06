@@ -5,7 +5,7 @@ commandes) et `LiveSDKUI` (écrans SwiftUI prêts à l'emploi, qui affichent la 
 
 ```swift
 // Package.swift de l'app, ou Xcode › Add Package Dependencies
-.package(url: "https://github.com/echimine/live-sdk.git", from: "X.Y.Z")
+.package(url: "https://github.com/echimine/live-sdk.git", from: "0.1.0")
 // produits : LiveSDK, LiveSDKUI
 ```
 
@@ -18,13 +18,32 @@ await LiveSDK.shared.configure(serverURL: URL(string: "https://live.echimine.fr"
 }
 ```
 
+## Jeton de Participant
+
+Votre backend expose `POST /live/participant-token` → `{ "token": "…" }` pour l'utilisateur connecté ;
+le SDK l'appelle via `tokenProvider` à chaque connexion, reconnexion et requête. Le jeton est un JWT
+HS256 signé avec le secret de votre App membre (transmis en privé par echimine, jamais embarqué dans l'app) :
+
+| Claim | Valeur |
+| --- | --- |
+| `iss` | identifiant de votre App membre |
+| `sub` | identifiant de l'utilisateur dans votre app |
+| `name` | pseudo, 1 à 30 caractères visibles |
+| `picture` | avatar en `https://`, facultatif |
+| `iat` | émission, obligatoire |
+| `exp` | expiration, 5 min après `iat` au plus |
+
+Aucun rôle : le serveur commun décide seul qui est Hôte, Co-hôte ou Spectateur. Un `invalid_token` au
+`join` est retenté une fois avec un jeton frais avant `status == .failed(.invalidToken)`.
+Exemple Node complet : [`examples/participant-token`](../examples/participant-token/README.md).
+
 ## Écrans
 
 | Écran | Rôle |
 | --- | --- |
 | `LiveListScreen(onOpenLive:onLaunch:)` | Lives en cours de toutes les App membres (titre, Hôte, App d'origine, Audience) + champ de lien direct |
 | `LiveLaunchScreen(onLaunched:onClose:)` | Aperçu caméra, vérifications (caméra, micro, serveur), titre facultatif ≤ 80, « Lancer » |
-| `LiveScreen(liveId:onClose:)` / `LiveScreen(session:onClose:)` | Le Live en plein écran : mosaïque de l'Hôte et des Co-hôtes, barre du haut (libellé du Live, Audience par App d’origine, ✕), 2 derniers messages, dock (💬 chat en feuille mi-hauteur, ❤️ Réaction rapide / appui long, 😀 toutes les Réactions), Réactions de tous en animation |
+| `LiveScreen(liveId:onClose:)` / `LiveScreen(session:onClose:)` | Le Live en plein écran : mosaïque de l'Hôte et des Co-hôtes, barre du haut (libellé du Live, 👁 Audience → feuille par App d’origine, ✕ qui, pour l'Hôte, propose de terminer le Live), bandeaux « Hôte déconnecté » / « Hôte revenu », pastille du Produit épinglé, 2 derniers messages, dock (💬 chat en feuille mi-hauteur, 🛍 produit — fiche d'achat, ou épingler / changer / retirer pour les Animateurs —, ✋ Demande de montée du Spectateur, « Redescendre » du Co-hôte, ⚙️ Gestion des Animateurs avec le badge des Demandes en attente, ❤️ Réaction rapide / appui long, 😀 toutes les Réactions), Réactions de tous en animation, Annonces d'achat et refus d'une Demande de montée en toast |
 
 La navigation reste à votre app : chaque écran rend la main par ses callbacks.
 `LiveLink.liveId(from:)` extrait l'identifiant d'un lien collé, pour brancher vos propres liens.
@@ -33,7 +52,8 @@ Sans les écrans, le cœur suffit : `try await LiveSDK.shared.openLive(id:)` ren
 observable (`status`, `role`, `host`, `audience`, `messages`…) et `session.send(_:)` envoie une
 commande typée (succès sur `ack`, sinon `LiveCommandError` à code fermé).
 `session.sendMessage(_:)` refuse un message vide ou trop long (`invalid_message`) sans rien envoyer,
-et verrouille le chat après un `rate_limited` (`session.chatLocked`, le temps indiqué) ;
+et verrouille le chat après un `rate_limited` (`session.chatLocked`, `session.chatLockRemaining` et
+`session.chatUnlockAt` pour afficher le décompte, le temps indiqué) ; un message reçu deux fois n'apparaît qu'une fois ;
 `session.react(_:)` n'envoie qu'un emoji de `session.config.reactions` et l'anime aussitôt via
 `session.events()`.
 
@@ -79,7 +99,7 @@ L’Hôte confirme « Terminer le Live ». Une erreur permet de réessayer ; un 
 
 La vidéo est une mosaïque portrait de 6 personnes au plus (`StageMosaic`) : 1 plein écran, 2 empilées, 2 × 2, puis 2 × 3 ; l’Hôte en haut à gauche, puis les Co-hôtes par ordre de montée (`session.stage`). La room LiveKit est en simulcast et `adaptiveStream` : chaque tuile reçoit la qualité de sa taille.
 
-- Spectateur : ✋ demande à monter (caméra et micro autorisés d’abord), puis l’annule. `session.joinRequestPending` suit la demande ; le serveur ne signale pas un refus, et une reconnexion perd la demande.
+- Spectateur : ✋ demande à monter (caméra et micro autorisés d’abord), puis l’annule. `session.joinRequestPending` suit la demande, effacée à la montée, au refus — annoncé par `LiveEvent.joinDeclined` dans `session.events()` et en toast — ou à une reconnexion, qui perd la demande.
 - Acceptation : `roleChanged` publie caméra et micro dans la room déjà connectée, sans nouveau jeton ni reconnexion. Redescendre (soi-même ou retiré par l’Hôte) coupe la publication ; on reste dans le Live.
 - Hôte : ⚙️ Gestion porte le nombre de Demandes de montée en attente, permet d’accepter, refuser et retirer un Co-hôte, avec le compte `n/5` (`LiveSession.maxCohosts`) ; `cohost_limit` est affiché.
 - Co-hôte : « Redescendre », après confirmation.
@@ -92,6 +112,31 @@ La modération ne vaut que pour le Live en cours. `session.moderationActions(for
 - ⚙️ Gestion, ouverte à l’Hôte et aux Co-hôtes : Demandes de montée et Co-hôtes (Hôte), épingler ou changer le Produit épinglé, Shadowbans à lever, « Terminer le Live » (Hôte).
 - `session.moderation` (listes servies aux seuls Animateurs) ne contient jamais le Participant lui-même et redevient `nil` quand il redescend Spectateur : rien ne révèle un Shadowban. Un Co-hôte monté en cours de Live reçoit les listes au prochain changement.
 - Participant banni : `status == .banned`, l’écran affiche « Vous avez été exclu de ce Live » et un bouton Fermer ; la session ne se reconnecte pas, d’autres Lives restent ouverts à lui.
+- Sans les écrans : `session.send(.deleteMessage(messageId:))`, `.shadowban(participantId:)`, `.unshadowban(participantId:)`, `.ban(participantId:)` ; le Bannissement arrive dans `session.status` (`.banned`).
+
+## Journaux
+
+Le cœur écrit dans le journal unifié (`os.Logger`, sous-système `fr.echimine.live`, catégories `session`, `media`, `http`) : connexions et reconnexions, `join` refusé, messages serveur ignorés, échecs d'envoi d'image et de connexion média. Jamais de jeton, d'URL portant un jeton ni de texte du chat ; aucune télémétrie.
+
+## Produits et achats
+
+Le cœur expose `session.pinProduct(name:price:currency:image:)`, `unpinProduct()` et
+`purchase(productId:)`, tous à code fermé (`LiveCommandError`). Le prix est exprimé en centimes.
+`ProductImage.url` transmet une URL HTTPS de catalogue ; `.data` réduit et oriente la photo à
+1 024 px maximum, puis envoie un JPEG authentifié à `POST /v1/images` avant la commande d’épinglage.
+Un produit invalide est refusé sans rien envoyer (`invalidProduct`), une photo illisible aussi
+(`invalidImage`) ; le serveur répond `payloadTooLarge` (413) ou `unsupportedMediaType` (415), et un
+serveur injoignable donne `network`. Un échec d’envoi ne remplace pas le produit existant.
+
+Les écrans acceptent une source facultative via `.productSource(MyProductSource())`.
+Implémentez `ProductSource.searchProducts(matching:)` et renvoyez des
+`ProductSuggestion` (initialiseur public). Les recherches (`ProductSearch`) sont différées de 300 ms,
+annulées à la frappe suivante et limitées à 5 secondes et 20 résultats valides (nom de 1 à
+`config.product.nameMaxLength` caractères visibles, prix de 0 à 1 000 000 centimes, devise ISO,
+image https, `id` non vide et sans doublon).
+La saisie manuelle reste accessible en cas d’erreur. La fiche conserve l’identifiant
+présenté lors de son ouverture : `product_changed` invite à rouvrir le nouveau produit.
+Les achats sont simulés ; annonces et prix utilisent la locale du téléphone.
 
 ## Vérification manuelle (iOS 17+)
 
@@ -107,19 +152,3 @@ La spécification #19 prévoit une vérification manuelle des écrans, sans test
 8. Modération : depuis l’Hôte, toucher un message d’un Spectateur, le supprimer (disparaît chez tous), mettre son auteur en Shadowban (ses messages ne sont plus vus que de lui, et rien ne change de son côté), lever le Shadowban dans ⚙️ Gestion, puis le bannir (exclu immédiatement avec un message, il rejoint un autre Live sans souci). Depuis un Co-hôte, vérifier que le message d’un autre Co-hôte ne propose que la suppression ; épingler puis changer le produit depuis ⚙️ Gestion.
 
 Validation automatisée : `swift test`, puis `xcodebuild -scheme LiveSDK-Package -destination 'generic/platform=iOS Simulator' -quiet build`.
-
-### Produits et achats
-
-Le cœur expose `session.pinProduct(name:price:currency:image:)`, `unpinProduct()` et
-`purchase(productId:)`. Le prix est exprimé en centimes. `ProductImage.url` transmet
-une URL HTTPS de catalogue ; `.data` réduit et oriente la photo à 1 024 px maximum,
-puis envoie un JPEG authentifié à `POST /v1/images` avant la commande d’épinglage.
-Un échec d’envoi ne remplace pas le produit existant.
-
-Les écrans acceptent une source facultative via `.productSource(MyProductSource())`.
-Implémentez `ProductSource.searchProducts(matching:)` et renvoyez des
-`ProductSuggestion` (initialiseur public). Les recherches sont différées de 300 ms,
-annulées à la frappe suivante et limitées à 5 secondes et 20 résultats valides.
-La saisie manuelle reste accessible en cas d’erreur. La fiche conserve l’identifiant
-présenté lors de son ouverture : `product_changed` invite à rouvrir le nouveau produit.
-Les achats sont simulés ; annonces et prix utilisent la locale du téléphone.

@@ -1,5 +1,5 @@
 import { SlidingWindow } from "./rate-limit.js";
-import { Product } from "./protocol/index.js";
+import { Product, visibleText } from "./protocol/index.js";
 
 /** Un Achat par seconde au plus, par Participant. */
 export const PURCHASE_INTERVAL_MS = 1_000;
@@ -10,13 +10,16 @@ export type ProductInput = Omit<Product, "id">;
 
 /**
  * Produit valide d'après une commande `pinProduct` (champs inconnus ignorés), ou
- * `undefined` : nom de 1 à `nameMaxLength` caractères, prix de 0 à 1 000 000
- * centimes, devise ISO 4217 en majuscules, image facultative en https.
+ * `undefined` : nom de 1 à `nameMaxLength` caractères visibles (après `trim`,
+ * comme un message du chat), prix de 0 à 1 000 000 centimes, devise ISO 4217 en
+ * majuscules, image facultative en https.
  */
 export function productInput(candidate: unknown, nameMaxLength: number): ProductInput | undefined {
   const parsed = ProductInput.safeParse(candidate);
-  if (!parsed.success || parsed.data.name.length > nameMaxLength) return undefined;
-  const { name, price, currency, imageUrl } = parsed.data;
+  if (!parsed.success) return undefined;
+  const name = visibleText(parsed.data.name, nameMaxLength);
+  if (name === undefined) return undefined;
+  const { price, currency, imageUrl } = parsed.data;
   return { name, price, currency, ...(imageUrl !== undefined && { imageUrl }) };
 }
 

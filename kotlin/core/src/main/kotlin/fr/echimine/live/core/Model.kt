@@ -2,8 +2,15 @@ package fr.echimine.live.core
 
 import fr.echimine.live.core.protocol.InstantSerializer
 import kotlinx.serialization.ExperimentalSerializationApi
+import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.SerializationException
+import kotlinx.serialization.descriptors.PrimitiveKind
+import kotlinx.serialization.descriptors.PrimitiveSerialDescriptor
+import kotlinx.serialization.descriptors.SerialDescriptor
+import kotlinx.serialization.encoding.Decoder
+import kotlinx.serialization.encoding.Encoder
 import kotlinx.serialization.json.JsonClassDiscriminator
 import java.time.Instant
 
@@ -19,15 +26,41 @@ public data class Participant(
     val picture: String? = null,
 )
 
-/** Rôle d'un Participant dans un Live, décidé par le serveur commun seul. */
-@Serializable
-public enum class Role {
-    @SerialName("host") Host,
-    @SerialName("cohost") Cohost,
-    @SerialName("viewer") Viewer;
+/**
+ * Rôle d'un Participant dans un Live, décidé par le serveur commun seul.
+ * Un rôle que cette version du SDK ne connaît pas (serveur plus récent) devient [Unknown], sans rendre
+ * le `snapshot` illisible ; il est traité comme un Spectateur.
+ */
+@Serializable(with = RoleSerializer::class)
+public enum class Role(internal val wire: String?) {
+    Host("host"),
+    Cohost("cohost"),
+    Viewer("viewer"),
+
+    /** Rôle inconnu de cette version du SDK : ni Animateur, ni Spectateur à proprement parler. */
+    Unknown(null),
+    ;
 
     /** L'Hôte ou un Co-hôte : peut épingler un Produit et modérer. */
-    public val isAnimator: Boolean get() = this != Viewer
+    public val isAnimator: Boolean get() = this == Host || this == Cohost
+
+    internal companion object {
+        fun fromWire(role: String): Role = entries.firstOrNull { it.wire == role } ?: Unknown
+    }
+}
+
+/**
+ * Tolérant au décodage (valeur inconnue → [Role.Unknown]). Le SDK n'émet jamais de rôle : encoder
+ * [Role.Unknown] est une erreur de programmation, signalée plutôt qu'inventée.
+ */
+internal object RoleSerializer : KSerializer<Role> {
+    override val descriptor: SerialDescriptor = PrimitiveSerialDescriptor("Role", PrimitiveKind.STRING)
+
+    override fun serialize(encoder: Encoder, value: Role) {
+        encoder.encodeString(value.wire ?: throw SerializationException("Un rôle inconnu ne s'encode pas."))
+    }
+
+    override fun deserialize(decoder: Decoder): Role = Role.fromWire(decoder.decodeString())
 }
 
 /** Co-hôtes à l'écran au plus, aux côtés de l'Hôte (fixé par le serveur commun : `cohost_limit` au-delà). */

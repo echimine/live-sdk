@@ -28,17 +28,6 @@ extension ModerationAction {
     }
 }
 
-enum ModerationText {
-    static func message(for error: LiveCommandError) -> String {
-        switch error.code {
-        case .notAnimator: error.message.isEmpty ? "Vous ne pouvez pas modérer ce Participant." : error.message
-        case .notFound: "Ce message ou ce Participant n’est plus dans le Live."
-        case .disconnected: "Connexion perdue. Réessayez."
-        default: error.message.isEmpty ? "La modération a échoué. Réessayez." : error.message
-        }
-    }
-}
-
 /// Toucher un message (Animateurs) : supprimer, Shadowban ou Bannissement de son auteur.
 private struct ModerationDialog: ViewModifier {
     let session: LiveSession
@@ -89,7 +78,7 @@ private struct ModerationDialog: ViewModifier {
             do throws(LiveCommandError) {
                 try await session.send(action.command(for: target))
             } catch {
-                if session.status == .connected { self.error = ModerationText.message(for: error) }
+                if session.status == .connected { self.error = error.displayMessage }
             }
         }
     }

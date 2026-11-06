@@ -1,0 +1,6 @@
+{
+  "type": "error",
+  "ref": "c21",
+  "code": "product_changed",
+  "message": "Le Produit épinglé a changé entre-temps."
+}

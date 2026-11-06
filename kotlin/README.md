@@ -15,7 +15,7 @@ dependencyResolutionManagement {
 
 // build.gradle.kts de l'app
 dependencies {
-    implementation("com.github.echimine.live-sdk:ui:X.Y.Z") // tire aussi :core
+    implementation("com.github.echimine.live-sdk:ui:0.1.0") // tire aussi :core
 }
 ```
 
@@ -28,6 +28,15 @@ LiveSdk.configure(
     tokenProvider = { myBackend.participantToken() },
 )
 ```
+
+## Jeton de Participant
+
+Votre backend ajoute `POST /live/participant-token → { "token": "<JWT>" }` : un JWT HS256 signé
+avec le secret de votre App membre, claims `iss` (identifiant de l'app), `sub` (identifiant de
+l'utilisateur), `name` (pseudo, 1 à 30 caractères visibles), `picture` (https, facultatif), `iat`
+et `exp` (5 min au plus). Aucun rôle : le serveur commun décide seul. Exemple Node complet dans
+[`examples/participant-token`](../examples/participant-token/README.md) ; guide d'intégration dans
+le [README racine](../README.md).
 
 ## Écrans
 

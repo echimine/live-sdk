@@ -32,7 +32,7 @@ class FakeTransport : LiveTransport {
                 HttpResponse(200, emptyMap(), fixture("http/lives.list.response.json"))
             request.url.endsWith("/v1/lives") && request.method == "POST" ->
                 HttpResponse(201, emptyMap(), fixture("http/lives.create.response.json"))
-            else -> HttpResponse(404, emptyMap(), fixture("http/error.json"))
+            else -> HttpResponse(404, emptyMap(), fixture("http/error.not_found.json"))
         }
     }
 

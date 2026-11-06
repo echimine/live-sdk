@@ -47,7 +47,11 @@ import fr.echimine.live.core.LiveErrorCode
 import fr.echimine.live.core.LiveResult
 import fr.echimine.live.core.Role
 import fr.echimine.live.core.visibleLength
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.seconds
+import kotlin.time.TimeMark
 
 /** Les 2 derniers messages, au-dessus du dock ; un tap ouvre le chat. */
 @Composable
@@ -94,6 +98,7 @@ internal fun ChatSheet(
     config: LiveConfig,
     messages: List<ChatMessage>,
     locked: Boolean,
+    unlockAt: TimeMark?,
     onDismiss: () -> Unit,
     onMessageTap: ((ChatMessage) -> Unit)? = null,
 ) {
@@ -132,7 +137,7 @@ internal fun ChatSheet(
                     ChatMessageRow(message, modifier)
                 }
             }
-            ChatInput(live, config.chatMaxLength, locked)
+            ChatInput(live, config.chatMaxLength, locked, unlockAt)
         }
     }
 }
@@ -184,8 +189,21 @@ private fun RoleBadge(label: String) {
  * après un `rate_limited`, le champ est verrouillé avec « Doucement… » le temps indiqué.
  */
 @Composable
-private fun ChatInput(live: Live, max: Int, locked: Boolean) {
+private fun ChatInput(live: Live, max: Int, locked: Boolean, unlockAt: TimeMark?) {
     val scope = rememberCoroutineScope()
+    // Décompte par seconde jusqu'à la fin du verrou : « Doucement… 4 s ».
+    var remainingSeconds by remember(unlockAt) { mutableStateOf<Int?>(null) }
+    LaunchedEffect(unlockAt) {
+        if (unlockAt == null) return@LaunchedEffect
+        while (true) {
+            val remaining = (-unlockAt.elapsedNow()).coerceAtLeast(Duration.ZERO)
+            val seconds = ((remaining.inWholeMilliseconds + 999) / 1000).toInt()
+            remainingSeconds = seconds
+            if (seconds == 0) break
+            delay(remaining - (seconds - 1).seconds)
+        }
+    }
+    val lockHint = "Doucement…" + (remainingSeconds?.takeIf { it > 0 }?.let { " $it s" } ?: "")
     var draft by rememberSaveable { mutableStateOf("") }
     var sending by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -203,7 +221,7 @@ private fun ChatInput(live: Live, max: Int, locked: Boolean) {
                 is LiveResult.Success -> if (draft == text) draft = ""
                 is LiveResult.Failure ->
                     // `rate_limited` verrouille le champ via l'état du Live ; le reste s'affiche ici.
-                    if (result.error.code != LiveErrorCode.RateLimited) error = result.error.message
+                    if (result.error.code != LiveErrorCode.RateLimited) error = result.error.displayMessage()
             }
             sending = false
         }
@@ -218,7 +236,7 @@ private fun ChatInput(live: Live, max: Int, locked: Boolean) {
                     error = null
                 },
                 enabled = !locked,
-                placeholder = { Text(if (locked) "Doucement…" else "Ajouter un message…") },
+                placeholder = { Text(if (locked) lockHint else "Ajouter un message…") },
                 isError = tooLong || error != null,
                 maxLines = 4,
                 shape = RoundedCornerShape(LocalLiveTheme.current.cornerRadius),
@@ -228,7 +246,7 @@ private fun ChatInput(live: Live, max: Int, locked: Boolean) {
             TextButton(onClick = ::send, enabled = canSend) { Text("Envoyer") }
         }
         val hint = when {
-            locked -> "Doucement…"
+            locked -> lockHint
             error != null -> error
             tooLong -> "Trop long : $length / $max caractères"
             length > max - COUNTER_THRESHOLD -> "$length / $max"
@@ -251,7 +269,7 @@ private const val COUNTER_THRESHOLD = 30
 private fun roleLabel(role: Role): String? = when (role) {
     Role.Host -> "Hôte"
     Role.Cohost -> "Co-hôte"
-    Role.Viewer -> null
+    Role.Viewer, Role.Unknown -> null
 }
 
 internal fun chatBody(message: ChatMessage): String = when (message) {

@@ -159,22 +159,6 @@ private struct CheckRow: View {
     }
 }
 
-struct CloseButton: View {
-    let label: String
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: "xmark")
-                .font(.system(size: 15, weight: .bold))
-                .foregroundStyle(.white)
-                .frame(width: 36, height: 36)
-                .background(.black.opacity(0.45), in: Circle())
-        }
-        .accessibilityLabel(label)
-    }
-}
-
 extension Color {
     static let errorText = Color(red: 1, green: 0.54, blue: 0.5)
     static let okText = Color(red: 0.41, green: 0.94, blue: 0.68)

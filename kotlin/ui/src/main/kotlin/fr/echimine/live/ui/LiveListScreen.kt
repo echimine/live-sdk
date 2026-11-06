@@ -38,7 +38,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import fr.echimine.live.core.LiveClient
@@ -72,7 +71,7 @@ public fun LiveListScreen(
                 lives = result.value
                 error = null
             }
-            is LiveResult.Failure -> error = result.error.message
+            is LiveResult.Failure -> error = result.error.displayMessage()
         }
     }
     LaunchedEffect(client) {
@@ -160,23 +159,12 @@ private fun LiveRow(live: LiveSummary, onClick: () -> Unit) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Avatar(live.host, size = 44.dp)
-        Column(Modifier.weight(1f)) {
-            Text(
-                live.title ?: "Live de ${live.host.name}",
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onBackground,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Text(
-                participantLine(live.host),
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                fontSize = 13.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
+        ParticipantLine(
+            live.host,
+            modifier = Modifier.weight(1f),
+            avatarSize = 44.dp,
+            headline = live.title ?: "Live de ${live.host.name}",
+        )
         Text(
             "👁 ${live.audience}",
             color = MaterialTheme.colorScheme.onSurfaceVariant,

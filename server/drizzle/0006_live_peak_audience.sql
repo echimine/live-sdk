@@ -1,0 +1,1 @@
+ALTER TABLE "lives" ADD COLUMN "peak_audience" integer DEFAULT 0 NOT NULL;

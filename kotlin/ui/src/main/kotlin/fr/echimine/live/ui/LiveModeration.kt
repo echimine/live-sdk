@@ -36,7 +36,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.clearAndSetSemantics
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -95,7 +94,7 @@ internal fun MessageActionsSheet(live: Live, details: LiveDetails, message: Chat
             when (val result = command()) {
                 is LiveResult.Success -> onDismiss()
                 is LiveResult.Failure -> {
-                    error = moderationError(result.error)
+                    error = result.error.displayMessage()
                     busy = false
                 }
             }
@@ -176,7 +175,7 @@ internal fun ManagementSheet(
         error = null
         scope.launch {
             val result = command()
-            if (result is LiveResult.Failure) error = moderationError(result.error)
+            if (result is LiveResult.Failure) error = result.error.displayMessage()
             busy = busy - participantId
         }
     }
@@ -207,7 +206,9 @@ internal fun ManagementSheet(
                         ) { Text("Accepter") }
                     }
                 }
-                if (stageFull && details.joinRequests.isNotEmpty()) EmptyLine(STAGE_FULL)
+                if (stageFull && details.joinRequests.isNotEmpty()) {
+                    EmptyLine(LiveError(LiveErrorCode.CohostLimit, "").displayMessage())
+                }
             }
 
             SectionTitle("Co-hôtes (${details.cohosts.size}/$MAX_COHOSTS)")
@@ -304,23 +305,13 @@ private fun EmptyLine(text: String) {
     Text(text, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 14.sp, modifier = Modifier.padding(vertical = 4.dp))
 }
 
+/** Un Participant d'une liste de Gestion, avec ses boutons à droite. */
 @Composable
 private fun ParticipantRow(participant: Participant, actions: @Composable () -> Unit) {
     Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.weight(1f)) { ParticipantLine(participant) }
+        ParticipantLine(participant, Modifier.weight(1f))
+        Spacer(Modifier.width(8.dp))
         actions()
-    }
-}
-
-@Composable
-private fun ParticipantLine(participant: Participant) {
-    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.semantics(mergeDescendants = true) {}) {
-        Avatar(participant, size = 32.dp)
-        Spacer(Modifier.width(10.dp))
-        Column {
-            Text(participant.name, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(participant.app, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp, maxLines = 1)
-        }
     }
 }
 
@@ -334,15 +325,3 @@ private fun ActionButton(label: String, enabled: Boolean, destructive: Boolean =
         )
     }
 }
-
-/** Message d'erreur d'une commande de Gestion ou de modération. */
-private fun moderationError(error: LiveError): String = when (error.code) {
-    LiveErrorCode.CohostLimit -> STAGE_FULL
-    LiveErrorCode.NotFound -> "Ce n'est plus d'actualité."
-    LiveErrorCode.NotConnected, LiveErrorCode.Timeout -> "Connexion perdue. Réessayez."
-    else -> error.message.ifBlank { "L'action a échoué. Réessayez." }
-}
-
-/** Limite fixée par le serveur commun : une 6e acceptation est refusée (`cohost_limit`). */
-private const val MAX_COHOSTS = 5
-private const val STAGE_FULL = "Déjà $MAX_COHOSTS Co-hôtes à l'écran : retirez-en un pour accepter."

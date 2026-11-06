@@ -16,6 +16,8 @@ export const lives = pgTable(
     endReason: text("end_reason", { enum: ["endedByHost", "hostTimeout"] }),
     /** Total des Réactions, écrit périodiquement pendant le Live et à sa fin. */
     reactionsTotal: integer("reactions_total").notNull().default(0),
+    /** Audience maximale atteinte, écrite à chaque nouveau sommet : le récapitulatif survit à un redémarrage. */
+    peakAudience: integer("peak_audience").notNull().default(0),
   },
   // Un seul Live en cours par Hôte : garantit l'idempotence du lancement, même en concurrence.
   (table) => [uniqueIndex("lives_one_running_per_host").on(table.hostId).where(sql`${table.endedAt} is null`)],

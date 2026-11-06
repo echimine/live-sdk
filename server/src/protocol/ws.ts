@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { Currency, HttpsUrl, LiveTitle, Participant, Price, ProductName, Role, Timestamp } from "./common.js";
+import { Currency, EndSummary, HttpsUrl, LiveTitle, Participant, Price, ProductName, Role, Timestamp } from "./common.js";
 
 /*
  * Protocole WebSocket du Live (`/v1/lives/{id}/ws`) : enveloppe JSON discriminée
@@ -117,7 +117,11 @@ export type ErrorCode = z.infer<typeof ErrorCode>;
 export const ServerMessage = z.discriminatedUnion("type", [
   message("ack", { ref: Ref }),
   message("error", {
-    /** Absent quand l'erreur répond à `join` ou à un message illisible. */
+    /**
+     * Absent quand l'erreur répond à `join` (`invalid_token`, `live_not_found`,
+     * `banned`, `rate_limited`, `invalid_command`) ou à une commande sans `ref`
+     * valide : le SDK ne peut alors la rattacher à aucune commande.
+     */
     ref: Ref.optional(),
     code: ErrorCode,
     message: z.string(),
@@ -162,14 +166,8 @@ export const ServerMessage = z.discriminatedUnion("type", [
   /** La room est supprimée et les sockets fermés. */
   message("liveEnded", {
     reason: z.enum(["endedByHost", "hostTimeout"]),
-    /** Récapitulatif de fin : pour l'Hôte seul. */
-    summary: z
-      .object({
-        purchases: z.int().min(0),
-        reactions: z.int().min(0),
-        peakAudience: z.int().min(0),
-      })
-      .optional(),
+    /** Récapitulatif de fin : pour l'Hôte seul (sinon `GET /v1/lives/{id}/summary`). */
+    summary: EndSummary.optional(),
   }),
   /** Vers l'Hôte seul. */
   message("joinRequested", { participant: Participant }),

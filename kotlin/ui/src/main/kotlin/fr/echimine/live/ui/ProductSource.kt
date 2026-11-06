@@ -48,7 +48,8 @@ internal sealed interface ProductSearchState {
 
 /**
  * Recherche dans une [ProductSource] : 300 ms après la dernière frappe, la précédente annulée,
- * 5 s au plus, 20 résultats au plus, les produits que le serveur commun refuserait écartés.
+ * 5 s au plus, 20 résultats au plus, les produits que le serveur commun refuserait écartés,
+ * ainsi que ceux sans `id` ; un `id` en double ne garde que sa première occurrence.
  */
 internal class ProductSearch(
     private val source: ProductSource,
@@ -96,6 +97,8 @@ internal class ProductSearch(
     private fun valid(suggestions: List<ProductSuggestion>): List<ProductSuggestion> {
         val max = nameMaxLength()
         return suggestions.asSequence()
+            .filter { it.id.isNotBlank() }
+            .distinctBy { it.id }
             .map { it.copy(name = it.name.trim()) }
             .filter { productProblem(it.name, it.priceCents, it.currency, it.imageUrl, max) == null }
             .take(MAX_RESULTS)

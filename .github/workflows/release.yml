@@ -1,0 +1,68 @@
+name: Release
+
+# Un tag semver `X.Y.Z` publie les deux SDK d'un coup : le Swift Package est tiré depuis le tag
+# par SPM, le SDK Kotlin est construit par JitPack (`jitpack.yml`) sous la même version.
+on:
+  push:
+    tags:
+      - "[0-9]+.[0-9]+.[0-9]+"
+
+permissions:
+  contents: write
+
+jobs:
+  swift:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      # ConfigTests vérifie que les valeurs par défaut embarquées sont la copie de protocol/fixtures/config.json.
+      - run: swift test
+      - name: Build iOS Simulator
+        run: xcodebuild -scheme LiveSDK-Package -destination 'generic/platform=iOS Simulator' -quiet build
+
+  kotlin:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: kotlin
+    env:
+      VERSION: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+      # ProtocolFixturesTest vérifie que LiveConfig.Defaults est la copie de protocol/fixtures/config.json.
+      - run: ./gradlew build --console=plain
+      # La même commande que jitpack.yml, sous la version du tag : ce que JitPack construira.
+      - run: ./gradlew :core:publishReleasePublicationToMavenLocal :ui:publishReleasePublicationToMavenLocal --console=plain
+      - name: Vérifier les artefacts publiés
+        run: |
+          test -f ~/.m2/repository/com/github/echimine/live-sdk/core/$VERSION/core-$VERSION.aar
+          test -f ~/.m2/repository/com/github/echimine/live-sdk/ui/$VERSION/ui-$VERSION.aar
+
+  release:
+    needs: [swift, kotlin]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Créer la GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          cat > notes.md <<EOF
+          ## Intégration
+
+          - Swift : \`.package(url: "https://github.com/echimine/live-sdk.git", from: "$TAG")\` (produits \`LiveSDK\`, \`LiveSDKUI\`)
+          - Kotlin : \`implementation("com.github.echimine.live-sdk:ui:$TAG")\` via JitPack (\`maven("https://jitpack.io")\`)
+
+          Guide d'intégration : [README.md](https://github.com/echimine/live-sdk/blob/$TAG/README.md).
+          Les valeurs de config par défaut embarquées dans les SDK sont celles de \`protocol/fixtures/config.json\` à ce tag.
+          EOF
+          gh release create "$TAG" --title "$TAG" --notes-file notes.md --generate-notes
+      - name: Demander la construction JitPack
+        # JitPack construit à la première demande ; on la déclenche pour que la première app n'attende pas.
+        run: curl -sS -o /dev/null -w "JitPack: %{http_code}\n" "https://jitpack.io/com/github/echimine/live-sdk/ui/${{ github.ref_name }}/ui-${{ github.ref_name }}.pom" || true

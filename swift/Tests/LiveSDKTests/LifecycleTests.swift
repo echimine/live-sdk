@@ -69,7 +69,7 @@ struct LifecycleTests {
         let session = try await harness.configuredSDK().openLive(id: "lv_8f3k2m")
         let connection = try await harness.connection(0)
 
-        try connection.push(fixture: "ws/server/error.join.json")
+        try connection.push(fixture: "ws/server/error.banned.json")
         connection.drop()
 
         #expect(await eventually { session.status == .banned })
@@ -86,6 +86,43 @@ struct LifecycleTests {
 
         #expect(await eventually { session.status == .failed(.liveNotFound) })
         try await Self.expectNoReconnection(harness)
+    }
+
+    @Test func unJetonRefuseAuJoinEstRetenteUneFoisAvecUnJetonFrais() async throws {
+        let harness = Harness()
+        let session = try await harness.configuredSDK().openLive(id: "lv_8f3k2m")
+        let first = try await harness.connection(0)
+        _ = await eventually { first.sent.count == 1 }
+
+        first.push(#"{"type":"error","code":"invalid_token","message":"Jeton de Participant refusé."}"#)
+        first.drop()
+
+        let second = try await harness.connection(1)
+        #expect(await eventually { second.sent.count == 1 })
+        #expect(second.sentJSON.first == .object(["type": .string("join"), "token": .string("jeton-\(harness.tokens.count)")]))
+        #expect(second.sentJSON.first != first.sentJSON.first)
+        #expect(session.status != .failed(.invalidToken))
+
+        try second.push(fixture: "ws/server/snapshot.viewer.json")
+        #expect(await eventually { session.status == .connected })
+    }
+
+    @Test func unJetonRefuseDeuxFoisAuJoinFaitEchouerLeLive() async throws {
+        let harness = Harness()
+        let session = try await harness.configuredSDK().openLive(id: "lv_8f3k2m")
+        let first = try await harness.connection(0)
+
+        first.push(#"{"type":"error","code":"invalid_token","message":"Jeton de Participant refusé."}"#)
+        first.drop()
+        let second = try await harness.connection(1)
+        second.push(#"{"type":"error","code":"invalid_token","message":"Jeton de Participant refusé."}"#)
+        second.drop()
+
+        #expect(await eventually { session.status == .failed(.invalidToken) })
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(harness.socket.connectAttempts.count == 2)
+        // Un jeton pour la config, un par join : pas de troisième tentative.
+        #expect(harness.tokens.count == 3)
     }
 
     @Test func uneErreurSansReferenceEnCoursDeLiveNeLeTerminePas() async throws {

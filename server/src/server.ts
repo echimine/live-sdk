@@ -255,6 +255,12 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
 
     v1.get("/lives", async () => ({ lives: await lives.list() }));
 
+    // Récapitulatif d'un Live terminé, pour son Hôte seul : `404` pour tout autre cas, sans en dire plus.
+    v1.get<{ Params: { id: string } }>("/lives/:id/summary", async (request, reply) => {
+      const summary = await lives.summary(request.params.id, request.participant);
+      return summary ?? notFound(request, reply);
+    });
+
     v1.post("/lives", { preHandler: quota(quotas.launch, byParticipant) }, async (request, reply) => {
       const body = LivesCreateRequest.safeParse(request.body ?? {});
       if (!body.success) {

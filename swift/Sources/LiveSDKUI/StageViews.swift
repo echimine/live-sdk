@@ -62,7 +62,7 @@ struct ManagementSheet: View {
             Text("Demandes de montée")
         } footer: {
             if stageFull && !session.joinRequests.isEmpty {
-                Text(Self.stageFullMessage)
+                Text(LiveCommandError.stageFullMessage)
             }
         }
     }
@@ -132,19 +132,8 @@ struct ManagementSheet: View {
             do throws(LiveCommandError) {
                 try await session.send(command)
             } catch {
-                self.error = Self.message(for: error)
+                self.error = error.displayMessage
             }
-        }
-    }
-
-    private static let stageFullMessage = "Déjà \(LiveSession.maxCohosts) Co-hôtes à l’écran : retirez-en un pour accepter."
-
-    static func message(for error: LiveCommandError) -> String {
-        switch error.code {
-        case .cohostLimit: stageFullMessage
-        case .notFound: "Cette demande n’est plus d’actualité."
-        case .disconnected: "Connexion perdue. Réessayez."
-        default: error.message.isEmpty ? "La demande a échoué. Réessayez." : error.message
         }
     }
 }
@@ -176,9 +165,7 @@ struct BadgedDockButton: View {
     var body: some View {
         Button(action: action) {
             Text(symbol)
-                .font(.system(size: 24))
-                .frame(width: 48, height: 48)
-                .background(.black.opacity(0.45), in: Circle())
+                .dockChrome()
                 .overlay(alignment: .topTrailing) {
                     if badge > 0 {
                         Text(badge.formatted())
@@ -207,9 +194,7 @@ struct JoinRequestButton: View {
             Task { await toggle() }
         } label: {
             Text("✋")
-                .font(.system(size: 24))
-                .frame(width: 48, height: 48)
-                .background(session.joinRequestPending ? AnyShapeStyle(theme.accent) : AnyShapeStyle(.black.opacity(0.45)), in: Circle())
+                .dockChrome(background: session.joinRequestPending ? AnyShapeStyle(theme.accent) : AnyShapeStyle(.black.opacity(0.45)))
         }
         .disabled(sending)
         .accessibilityLabel(session.joinRequestPending ? "Annuler ma Demande de montée" : "Demander à monter à l’écran")
@@ -230,7 +215,7 @@ struct JoinRequestButton: View {
         do throws(LiveCommandError) {
             try await session.send(pending ? .cancelJoinRequest : .requestToJoin)
         } catch {
-            onError(error.message.isEmpty ? "La demande n’a pas pu être envoyée. Réessayez." : error.message)
+            onError(error.displayMessage)
         }
     }
 }

@@ -43,6 +43,13 @@
       "when": 1793968712452,
       "tag": "0005_live_moderation",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1793976455001,
+      "tag": "0006_live_peak_audience",
+      "breakpoints": true
     }
   ]
 }

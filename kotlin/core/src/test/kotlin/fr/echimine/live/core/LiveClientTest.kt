@@ -148,7 +148,7 @@ class LiveClientTest {
     fun uneErreurHttpRenvoieSonCodeFerme() = runTest {
         val client = configure()
         transport.http = {
-            HttpResponse(429, mapOf("Retry-After" to "12"), fixture("http/error.json"))
+            HttpResponse(429, mapOf("Retry-After" to "12"), fixture("http/error.rate_limited.json"))
         }
         assertEquals(
             LiveResult.Failure(
@@ -231,7 +231,7 @@ class LiveClientTest {
     @Test
     fun unLancementRefuseNOuvreRien() = runTest {
         val client = configure()
-        transport.http = { HttpResponse(429, body = fixture("http/error.json")) }
+        transport.http = { HttpResponse(429, body = fixture("http/error.rate_limited.json")) }
         val result = client.startLive("Titre") as LiveResult.Failure
         assertEquals(LiveErrorCode.RateLimited, result.error.code)
         assertEquals(0, transport.connectedUrls.size)

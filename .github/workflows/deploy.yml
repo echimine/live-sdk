@@ -1,7 +1,8 @@
 name: Deploy
 
 # Chaque commit sur main touchant le serveur commun le redéploie sur live.echimine.fr :
-# tests, image GHCR taguée par SHA, puis webhook du VPS.
+# build + tests, image GHCR taguée par SHA, puis webhook du VPS. (`deploy/` est
+# exclu de l'image : un changement de ce dossier se déploie à la main sur le VPS.)
 on:
   push:
     branches: [main]
@@ -11,7 +12,6 @@ on:
       - 'package.json'
       - 'pnpm-lock.yaml'
       - 'pnpm-workspace.yaml'
-      - 'deploy/**'
       - '.github/workflows/deploy.yml'
   workflow_dispatch:
 
@@ -26,6 +26,8 @@ env:
   IMAGE: ghcr.io/echimine/live-server
 
 jobs:
+  # Garde-fou minimal avant l'image : la suite complète (typecheck par langage)
+  # est celle de tests.yml, qui tourne sur le même commit.
   test:
     runs-on: ubuntu-latest
     env:
@@ -45,15 +47,14 @@ jobs:
           --health-timeout 3s
           --health-retries 10
     steps:
-      - uses: actions/checkout@v7
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm --filter @live-sdk/server typecheck
-      - run: pnpm --filter @live-sdk/server test
+      - run: pnpm build && pnpm test
 
   build-push:
     needs: test
@@ -62,7 +63,7 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v4
       - uses: docker/login-action@v4
         with:

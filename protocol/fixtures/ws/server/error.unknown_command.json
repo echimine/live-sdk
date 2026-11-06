@@ -1,0 +1,6 @@
+{
+  "type": "error",
+  "ref": "c1",
+  "code": "unknown_command",
+  "message": "Commande inconnue."
+}

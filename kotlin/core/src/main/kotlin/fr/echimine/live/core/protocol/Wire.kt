@@ -117,9 +117,10 @@ internal object Wire {
         "lives.list.response" -> roundTrip(LivesListResponse.serializer(), text)
         "lives.create.request" -> roundTrip(LivesCreateRequest.serializer(), text)
         "lives.create.response" -> roundTrip(LivesCreateResponse.serializer(), text)
+        "lives.summary.response" -> roundTrip(EndSummary.serializer(), text)
         "images.upload.response" -> roundTrip(ImagesUploadResponse.serializer(), text)
-        "error" -> roundTrip(HttpErrorBody.serializer(), text)
-        else -> error("fixture HTTP sans type Kotlin : $name")
+        // `error.<code>` : un corps d'erreur, un fichier par code.
+        else -> if (name.startsWith("error.")) roundTrip(HttpErrorBody.serializer(), text) else error("fixture HTTP sans type Kotlin : $name")
     }
 
     private fun <T> roundTrip(serializer: KSerializer<T>, text: String): JsonElement =

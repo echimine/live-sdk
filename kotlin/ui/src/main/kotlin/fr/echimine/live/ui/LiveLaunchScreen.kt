@@ -84,7 +84,7 @@ public fun LiveLaunchScreen(
         // Une liste obtenue prouve que le serveur répond et que le Jeton de Participant est accepté.
         server = when (val result = client.lives()) {
             is LiveResult.Success -> Check.Ok
-            is LiveResult.Failure -> Check.Failed(result.error.message)
+            is LiveResult.Failure -> Check.Failed(result.error.displayMessage())
         }
     }
 
@@ -149,7 +149,7 @@ public fun LiveLaunchScreen(
                             scope.launch {
                                 when (val result = client.startLive(title.trim().ifEmpty { null })) {
                                     is LiveResult.Success -> onLaunched(result.value)
-                                    is LiveResult.Failure -> launchError = result.error.message
+                                    is LiveResult.Failure -> launchError = result.error.displayMessage()
                                 }
                                 launching = false
                             }

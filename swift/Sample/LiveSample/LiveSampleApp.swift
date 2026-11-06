@@ -35,6 +35,18 @@ private enum Screen: Identifiable {
     }
 }
 
+/// Thème et Source de produits de l'app, appliqués aux écrans de la liste comme à ceux en plein écran
+/// (un `fullScreenCover` ne reçoit pas l'environnement de la vue qui le présente).
+private struct SampleStyle: ViewModifier {
+    static let theme = LiveTheme(label: "Crosslive")
+
+    func body(content: Content) -> some View {
+        content
+            .liveTheme(Self.theme)
+            .productSource(DemoProductSource())
+    }
+}
+
 private struct RootView: View {
     @AppStorage("pseudo") private var pseudo = ""
     @AppStorage("userId") private var userId = UUID().uuidString
@@ -49,8 +61,7 @@ private struct RootView: View {
                 PseudoForm(pseudo: $pseudo) { Task { await configure() } }
             }
         }
-        .liveTheme(LiveTheme(label: "Crosslive"))
-        .productSource(DemoProductSource())
+        .modifier(SampleStyle())
         .task {
             if !pseudo.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { await configure() }
         }
@@ -68,8 +79,7 @@ private struct RootView: View {
                     LiveScreen(liveId: id, onClose: { screen = nil })
                 }
             }
-            .liveTheme(LiveTheme(label: "Crosslive"))
-        .productSource(DemoProductSource())
+            .modifier(SampleStyle())
         }
     }
 

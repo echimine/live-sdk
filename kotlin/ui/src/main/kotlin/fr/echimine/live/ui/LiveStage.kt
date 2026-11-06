@@ -167,7 +167,7 @@ internal class CommandRunner(private val scope: CoroutineScope) {
         scope.launch {
             when (val result = action()) {
                 is LiveResult.Success -> onSuccess()
-                is LiveResult.Failure -> error = "$failure : ${result.error.message}"
+                is LiveResult.Failure -> error = "$failure : ${result.error.displayMessage()}"
             }
             pending = pending - key
         }

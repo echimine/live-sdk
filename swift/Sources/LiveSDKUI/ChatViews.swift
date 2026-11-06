@@ -108,11 +108,20 @@ struct ChatSheet: View {
     private var composer: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
-                TextField(session.chatLocked ? "Doucement…" : "Votre message", text: $draft)
-                    .textFieldStyle(.roundedBorder)
-                    .submitLabel(.send)
-                    .disabled(session.chatLocked)
-                    .onSubmit(send)
+                if let unlockAt = session.chatUnlockAt {
+                    // Décompte du verrou posé après un `rate_limited` : « Doucement… 4 s ».
+                    TimelineView(.periodic(from: .now, by: 1)) { context in
+                        let remaining = max(0, Int(unlockAt.timeIntervalSince(context.date).rounded(.up)))
+                        TextField("Doucement… \(remaining) s", text: $draft)
+                            .textFieldStyle(.roundedBorder)
+                            .disabled(true)
+                    }
+                } else {
+                    TextField("Votre message", text: $draft)
+                        .textFieldStyle(.roundedBorder)
+                        .submitLabel(.send)
+                        .onSubmit(send)
+                }
                 Button(action: send) {
                     Image(systemName: "paperplane.fill")
                 }
@@ -143,13 +152,12 @@ struct ChatSheet: View {
         let text = draft
         Task {
             defer { sending = false }
-            do {
+            do throws(LiveCommandError) {
                 try await session.sendMessage(text)
                 if draft == text { draft = "" }
-            } catch let error as LiveCommandError {
-                sendError = error.code == .rateLimited ? nil : error.message
             } catch {
-                sendError = error.displayMessage
+                // `rate_limited` : le décompte du verrou remplace le message.
+                sendError = error.code == .rateLimited ? nil : error.displayMessage
             }
         }
     }

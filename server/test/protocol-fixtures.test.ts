@@ -1,7 +1,15 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { ClientMessage, Config, httpMessages, ServerMessage } from "../src/protocol/index.js";
+import {
+  ClientMessage,
+  Config,
+  ErrorCode,
+  HttpError,
+  HttpErrorCode,
+  httpMessages,
+  ServerMessage,
+} from "../src/protocol/index.js";
 
 const fixturesDir = fileURLToPath(new URL("../../protocol/fixtures/", import.meta.url));
 
@@ -30,17 +38,26 @@ describe("contrat : config", () => {
   });
 });
 
+/** `error.not_found.json` → `not_found` ; `undefined` pour une autre fixture. */
+function errorCodeOfFixture(name: string): string | undefined {
+  return name.startsWith("error.") ? name.slice("error.".length) : undefined;
+}
+
 describe("contrat : HTTP /v1/", () => {
   const fixtures = listFixtures("http");
 
-  it("chaque message HTTP a sa fixture", () => {
-    expect(fixtures.map((f) => f.name).sort()).toEqual(Object.keys(httpMessages).sort());
+  it("chaque message HTTP a sa fixture, et chaque code d'erreur HTTP la sienne", () => {
+    const expected = [...Object.keys(httpMessages), ...HttpErrorCode.options.map((code) => `error.${code}`)];
+
+    expect(fixtures.map((f) => f.name).sort()).toEqual(expected.sort());
   });
 
   it.each(fixtures)("http/$file se décode puis se réencode à l'identique", ({ name, path }) => {
-    const schema = httpMessages[name as keyof typeof httpMessages];
+    const code = errorCodeOfFixture(name);
+    const schema = code === undefined ? httpMessages[name as keyof typeof httpMessages] : HttpError;
     const raw = readFixture(path);
 
+    if (code !== undefined) expect(raw).toMatchObject({ error: { code } });
     expect(roundTrip(schema, raw)).toStrictEqual(raw);
   });
 });
@@ -52,6 +69,16 @@ describe("contrat : erreurs WebSocket", () => {
     expect(ServerMessage.safeParse({ ...base, code: "rate_limited" }).success).toBe(false);
     expect(ServerMessage.safeParse({ ...base, code: "banned", retryAfterMs: 1000 }).success).toBe(false);
     expect(ServerMessage.safeParse({ ...base, code: "rate_limited", retryAfterMs: 1000 }).success).toBe(true);
+  });
+
+  it("chaque code d'erreur a au moins une fixture `error.<code>.json`, qui porte ce code", () => {
+    const errors = listFixtures("ws/server").filter((f) => errorCodeOfFixture(f.name) !== undefined);
+    for (const { name, path } of errors) {
+      expect(readFixture(path), name).toMatchObject({ type: "error", code: errorCodeOfFixture(name) });
+    }
+
+    const covered = [...new Set(errors.map((f) => errorCodeOfFixture(f.name)))].sort();
+    expect(covered).toEqual([...ErrorCode.options].sort());
   });
 });
 

@@ -1,0 +1,6 @@
+{
+  "type": "error",
+  "ref": "c2",
+  "code": "invalid_command",
+  "message": "Commande invalide."
+}

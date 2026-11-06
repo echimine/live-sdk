@@ -1,0 +1,6 @@
+{
+  "type": "error",
+  "ref": "c12",
+  "code": "not_found",
+  "message": "Participant introuvable dans ce Live."
+}

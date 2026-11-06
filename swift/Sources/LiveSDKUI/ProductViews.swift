@@ -25,8 +25,11 @@ public struct ProductSuggestion: Sendable, Hashable, Identifiable {
         self.imageURL = imageURL
     }
 
-    var isValid: Bool {
-        !id.isEmpty && !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && name.count <= 80 &&
+    /// Ce que le serveur commun accepterait : nom de 1 à `config.product.nameMaxLength` caractères visibles,
+    /// prix de 0 à 1 000 000 centimes, devise ISO, image https. Un `id` vide ne peut pas être dédoublonné.
+    func isValid(in config: LiveConfig) -> Bool {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !id.isEmpty && !trimmed.isEmpty && trimmed.count <= config.product.nameMaxLength &&
         (0...1_000_000).contains(priceCents) && currency.utf8.count == 3 && currency.utf8.allSatisfy { (65...90).contains($0) } &&
         (imageURL == nil || (imageURL?.scheme == "https" && imageURL?.host != nil))
     }
@@ -49,8 +52,8 @@ extension View {
 
 struct ProductSheet: View {
     let session: LiveSession
-    let source: (any ProductSource)?
     @Environment(\.dismiss) private var dismiss
+    @State private var search: ProductSearch?
     @State private var selected: Product?
     @State private var name = ""
     @State private var price = ""
@@ -60,13 +63,14 @@ struct ProductSheet: View {
     @State private var cameraData: Data?
     @State private var photo: PhotosPickerItem?
     @State private var query = ""
-    @State private var retry = 0
-    @State private var suggestions: [ProductSuggestion] = []
-    @State private var catalogueFailed = false
-    @State private var searching = false
     @State private var busy = false
     @State private var error: String?
     private var animator: Bool { session.role == .host || session.role == .cohost }
+
+    init(session: LiveSession, source: (any ProductSource)?) {
+        self.session = session
+        _search = State(initialValue: source.map { ProductSearch(source: $0, config: session.config) })
+    }
 
     var body: some View {
         Form {
@@ -86,15 +90,15 @@ struct ProductSheet: View {
                 Text("Aucun produit épinglé.")
             }
             if animator {
-                if let source {
+                if let search {
                     Section("Catalogue") {
                         TextField("Rechercher un produit", text: $query)
-                        if searching { ProgressView() }
-                        if catalogueFailed {
+                        if search.searching { ProgressView() }
+                        if search.failed {
                             Text("Catalogue indisponible")
-                            Button("Réessayer") { retry += 1 }
+                            Button("Réessayer") { search.retry() }
                         }
-                        ForEach(suggestions) { suggestion in
+                        ForEach(search.suggestions) { suggestion in
                             Button {
                                 name = suggestion.name
                                 price = NSDecimalNumber(decimal: Decimal(suggestion.priceCents) / 100).description(withLocale: Locale.current)
@@ -107,7 +111,8 @@ struct ProductSheet: View {
                             }
                         }
                     }
-                    .task(id: SearchID(query: query, retry: retry)) { await search(source) }
+                    .onChange(of: query) { _, typed in search.search(typed) }
+                    .onDisappear { search.cancel() }
                 }
                 Section("Saisie manuelle") {
                     TextField("Nom", text: $name)
@@ -152,39 +157,8 @@ struct ProductSheet: View {
         }
     }
 
-    private struct SearchID: Hashable { let query: String; let retry: Int }
-
-    private func search(_ source: any ProductSource) async {
-        suggestions = []
-        catalogueFailed = false
-        searching = false
-        guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-        do { try await Task.sleep(for: .milliseconds(300)) } catch { return }
-        searching = true
-        // Deux tâches indépendantes : le timeout reste effectif même si la source ignore l’annulation.
-        let request = Task { try await source.searchProducts(matching: query) }
-        let timeout = Task { @MainActor in
-            do { try await Task.sleep(for: .seconds(5)) } catch { return }
-            request.cancel()
-            searching = false
-            catalogueFailed = true
-        }
-        await withTaskCancellationHandler {
-            do {
-                let results = try await request.value
-                guard !Task.isCancelled, !timeout.isCancelled, !catalogueFailed else { return }
-                var seen = Set<String>()
-                suggestions = Array(results.filter { $0.isValid && seen.insert($0.id).inserted }.prefix(20))
-            } catch {
-                if !Task.isCancelled { catalogueFailed = true }
-            }
-            timeout.cancel()
-            if !Task.isCancelled { searching = false }
-        } onCancel: {
-            request.cancel()
-            timeout.cancel()
-        }
-    }
+    /// Photo choisie ou URL saisie illisible, avant tout envoi.
+    private static let unreadableImage = LiveCommandError(code: .invalidImage, message: "Image illisible. Choisissez une autre photo ou vérifiez l’URL.")
 
     private func pin() {
         guard let decimal = Decimal(string: price, locale: .current), decimal >= 0, decimal <= 10_000 else {
@@ -199,10 +173,10 @@ struct ProductSheet: View {
             if let cameraData {
                 image = .data(cameraData)
             } else if let photo {
-                guard let data = try await photo.loadTransferable(type: Data.self) else { throw ProductImageLoadError() }
+                guard let data = try await photo.loadTransferable(type: Data.self) else { throw Self.unreadableImage }
                 image = .data(data)
             } else if !imageURL.isEmpty {
-                guard let url = URL(string: imageURL) else { throw ProductImageLoadError() }
+                guard let url = URL(string: imageURL) else { throw Self.unreadableImage }
                 image = .url(url)
             } else { image = nil }
             try await session.pinProduct(name: name, price: amount, currency: currency, image: image)
@@ -216,14 +190,12 @@ struct ProductSheet: View {
         error = nil
         Task {
             defer { busy = false }
-            do { try await operation() } catch let command as LiveCommandError {
-                error = command.code == .productChanged ? "Le produit a changé. Fermez cette fiche et ouvrez le nouveau produit avant de confirmer." : (command.message.isEmpty ? "Action impossible. Réessayez." : command.message)
-            } catch { self.error = "Action impossible. Vérifiez l’image et la connexion, puis réessayez." }
+            do { try await operation() } catch { self.error = error.displayMessage }
         }
     }
 }
 
-private struct ProductImageLoadError: Error {}
+
 
 /// Toast en haut de l'écran : Annonces d'achat et refus d'une Demande de montée, quelques secondes chacun.
 struct LiveToast: View {

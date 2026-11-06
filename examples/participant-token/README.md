@@ -13,7 +13,11 @@ Le jeton est un JWT HS256 valable 5 min, signé avec le secret de votre App memb
 | `sub`     | identifiant de l'utilisateur dans votre app               |
 | `name`    | pseudo, 1 à 30 caractères visibles (sinon jeton refusé)   |
 | `picture` | avatar en `https://`, facultatif (sinon ignoré)           |
-| `exp`     | expiration                                                |
+| `iat`     | émission, obligatoire (`setIssuedAt()`)                   |
+| `exp`     | expiration, 5 min après `iat` au plus                     |
+
+Le serveur commun refuse tout jeton sans `iat` ou émis depuis plus de 5 min,
+quelle que soit son `exp`.
 
 Aucun rôle : le serveur commun décide seul qui est Hôte, Co-hôte ou Spectateur.
 

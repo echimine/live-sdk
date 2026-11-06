@@ -52,14 +52,16 @@ struct ProductTests {
         do {
             try await session.pinProduct(name: "Mug", price: 1200, currency: "EUR", image: .data(Data("invalide".utf8)))
             Issue.record("Une image illisible doit être refusée")
-        } catch {}
+        } catch {
+            #expect(error.code == .invalidImage)
+        }
         #expect(connection.sent.count == 1)
         #expect(harness.http.requests(to: "/v1/images").isEmpty)
     }
 
     @Test func uneErreurHTTPConserveLeProduitEtNeLEpinglePas() async throws {
         let harness = Harness()
-        harness.http.reply("POST", "/v1/images", status: 413, body: Data(#"{"error":{"code":"image_too_large","message":"Image trop lourde"}}"#.utf8))
+        harness.http.reply("POST", "/v1/images", status: 413, body: Data(#"{"error":{"code":"payload_too_large","message":"Image trop lourde"}}"#.utf8))
         let (session, connection) = try await LiveSessionTests.joined(fixture: "ws/server/snapshot.host.json", harness: harness)
         let previous = session.pinnedProduct
         let context = try #require(CGContext(data: nil, width: 2, height: 2, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue))
@@ -68,11 +70,52 @@ struct ProductTests {
         let destination = try #require(CGImageDestinationCreateWithData(data, UTType.png.identifier as CFString, 1, nil))
         CGImageDestinationAddImage(destination, image, nil)
         #expect(CGImageDestinationFinalize(destination))
-        await #expect(throws: LiveSDKError.server(code: "image_too_large", message: "Image trop lourde")) {
+        await #expect(throws: LiveCommandError(code: .payloadTooLarge, message: "Image trop lourde")) {
             try await session.pinProduct(name: "Photo", price: 100, currency: "EUR", image: .data(data as Data))
         }
         #expect(connection.sent.count == 1)
         #expect(session.pinnedProduct == previous)
+    }
+
+    @Test(arguments: [
+        (415, #"{"error":{"code":"unsupported_media_type","message":"Formats acceptés : image/png."}}"#, LiveErrorCode.unsupportedMediaType),
+        (413, "", LiveErrorCode.payloadTooLarge),
+        (500, "", LiveErrorCode.network),
+    ])
+    func unRefusHTTPDeLImageDonneUnCodeFerme(status: Int, body: String, expected: LiveErrorCode) async throws {
+        let harness = Harness()
+        harness.http.reply("POST", "/v1/images", status: status, body: Data(body.utf8))
+        let (session, _) = try await LiveSessionTests.joined(fixture: "ws/server/snapshot.host.json", harness: harness)
+        let png = try Self.tinyPNG()
+        do {
+            try await session.pinProduct(name: "Photo", price: 100, currency: "EUR", image: .data(png))
+            Issue.record("Le refus HTTP doit faire échouer l’épinglage")
+        } catch {
+            #expect(error.code == expected)
+        }
+    }
+
+    @Test func unServeurInjoignablePourLImageDonneNetwork() async throws {
+        let harness = Harness()
+        let (session, connection) = try await LiveSessionTests.joined(fixture: "ws/server/snapshot.host.json", harness: harness)
+        let png = try Self.tinyPNG()
+        do {
+            try await session.pinProduct(name: "Photo", price: 100, currency: "EUR", image: .data(png))
+            Issue.record("Un serveur injoignable doit faire échouer l’épinglage")
+        } catch {
+            #expect(error.code == .network)
+        }
+        #expect(connection.sent.count == 1)
+    }
+
+    static func tinyPNG() throws -> Data {
+        let context = try #require(CGContext(data: nil, width: 2, height: 2, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue))
+        let image = try #require(context.makeImage())
+        let data = NSMutableData()
+        let destination = try #require(CGImageDestinationCreateWithData(data, UTType.png.identifier as CFString, 1, nil))
+        CGImageDestinationAddImage(destination, image, nil)
+        #expect(CGImageDestinationFinalize(destination))
+        return data as Data
     }
 
     @Test func seulesLesNouvellesAnnoncesDeclenchentUnEvenementAchat() async throws {

@@ -99,20 +99,22 @@ interface TokenClaims {
   picture?: unknown;
   /** Expiration en secondes après `now`. */
   expiresIn?: number;
+  /** `false` : jeton sans `iat` (émis à `now` sinon). */
+  issuedAt?: boolean;
 }
 
 /** Jeton de Participant tel que le signerait le backend d'une App membre. */
 export async function participantToken(claims: TokenClaims = {}, secret?: string): Promise<string> {
-  const { iss = "demo-ios", sub = "u_1", expiresIn = 300, ...rest } = claims;
+  const { iss = "demo-ios", sub = "u_1", expiresIn = 300, issuedAt = true, ...rest } = claims;
   // `name: undefined` explicite : le claim est omis.
   const payload: Record<string, unknown> = "name" in rest ? { ...rest } : { name: "Léa", ...rest };
-  return new SignJWT(payload)
+  const jwt = new SignJWT(payload)
     .setProtectedHeader({ alg: "HS256" })
     .setIssuer(iss)
     .setSubject(sub)
-    .setIssuedAt(Math.floor(now.getTime() / 1000))
-    .setExpirationTime(Math.floor(now.getTime() / 1000) + expiresIn)
-    .sign(new TextEncoder().encode(secret ?? secretOf(iss)));
+    .setExpirationTime(Math.floor(now.getTime() / 1000) + expiresIn);
+  if (issuedAt) jwt.setIssuedAt(Math.floor(now.getTime() / 1000));
+  return jwt.sign(new TextEncoder().encode(secret ?? secretOf(iss)));
 }
 
 export function bearer(token: string): Record<string, string> {
