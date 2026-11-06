@@ -31,6 +31,20 @@ struct DiscoveryTests {
         #expect(request.headers["Content-Type"] == "application/json")
     }
 
+    @Test func relancerRendLeLiveEnCoursSansRemplacerSonTitre() async throws {
+        let harness = Harness()
+        try harness.http.reply("POST", "/v1/lives", status: 201, fixture: "http/lives.create.response.json")
+        try harness.http.reply("POST", "/v1/lives", status: 200, fixture: "http/lives.create.response.json")
+        let sdk = await harness.configuredSDK()
+
+        let first = try await sdk.startLive(title: "Unboxing des nouvelles baskets")
+        let resumed = try await sdk.startLive(title: "Un autre titre")
+
+        #expect(resumed == first)
+        #expect(resumed.title == "Unboxing des nouvelles baskets")
+        #expect(harness.http.requests(to: "/v1/lives").count == 2)
+    }
+
     @Test func lancerUnLiveSansTitreEnvoieUnCorpsVide() async throws {
         let harness = Harness()
         try harness.http.reply("POST", "/v1/lives", fixture: "http/lives.create.response.json")
