@@ -23,13 +23,18 @@ let package = Package(
         ),
         .target(
             name: "LiveSDKUI",
-            dependencies: ["LiveSDK"],
+            dependencies: ["LiveSDK", .product(name: "LiveKit", package: "client-sdk-swift")],
             path: "swift/Sources/LiveSDKUI"
         ),
         .testTarget(
             name: "LiveSDKTests",
             dependencies: ["LiveSDK"],
             path: "swift/Tests/LiveSDKTests"
+        ),
+        .testTarget(
+            name: "LiveSDKUITests",
+            dependencies: ["LiveSDKUI", "LiveSDK"],
+            path: "swift/Tests/LiveSDKUITests"
         ),
     ]
 )

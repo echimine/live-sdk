@@ -1,4 +1,5 @@
 import Foundation
+import LiveKit
 import Observation
 
 public enum LiveStatus: Sendable, Hashable {
@@ -22,7 +23,7 @@ public enum LiveStatus: Sendable, Hashable {
 @MainActor
 @Observable
 public final class LiveSession {
-    public let id: String
+    public nonisolated let id: String
     public private(set) var status = LiveStatus.connecting
     public private(set) var title: String?
     public private(set) var startedAt: Date?
@@ -46,6 +47,7 @@ public final class LiveSession {
     private var lastRef = 0
     private var failures = 0
     private var mediaConnected = false
+    private var mediaPublished = false
     private let media: any MediaConnector
     private var outbox: Task<Void, Never>?
     private var pending: [String: CheckedContinuation<Result<Void, LiveCommandError>, Never>] = [:]
@@ -56,6 +58,10 @@ public final class LiveSession {
         self.tokenProvider = tokenProvider
         self.environment = environment
         self.media = environment.makeMedia()
+    }
+
+    package var mediaRoom: Room? {
+        (media as? LiveKitMediaConnector)?.room
     }
 
     func start() {
@@ -121,7 +127,7 @@ public final class LiveSession {
     }
 
     private func open() async -> (any WebSocketConnection)? {
-        guard let token = try? await tokenProvider(),
+        guard let token = try? await tokenProvider(), !status.isFinal,
               let join = try? Self.encode(.join(token: token)),
               let connection = try? await environment.webSocket.connect(to: url)
         else { return nil }
@@ -222,12 +228,16 @@ public final class LiveSession {
     }
 
     private func connectMedia(_ livekit: Snapshot.LiveKit) async {
-        guard !mediaConnected else { return }
-        do {
-            try await media.connect(url: livekit.url, token: livekit.token)
-            mediaConnected = true
-        } catch {
-            return
+        if !mediaConnected {
+            do {
+                try await media.connect(url: livekit.url, token: livekit.token)
+                mediaConnected = true
+            } catch {
+                return
+            }
+        }
+        if role == .host && !mediaPublished {
+            mediaPublished = (try? await media.publishCameraAndMicrophone()) != nil
         }
         if status.isFinal {
             await media.disconnect()
