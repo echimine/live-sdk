@@ -117,3 +117,12 @@ public data class LiveEndSummary(
     val reactions: Int,
     val peakAudience: Int,
 )
+
+/** Photo d'un produit à épingler : une URL https déjà en ligne, ou une image à envoyer au serveur commun. */
+public sealed interface ProductImage {
+    /** Transmise telle quelle (par exemple l'image d'une Source de produits). */
+    public data class Url(val url: String) : ProductImage
+
+    /** JPEG, PNG ou WebP : réduite par le SDK (1024 px au plus) puis envoyée via `POST /v1/images`. */
+    public class Data(public val bytes: ByteArray) : ProductImage
+}

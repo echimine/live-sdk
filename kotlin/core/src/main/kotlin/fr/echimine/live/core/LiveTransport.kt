@@ -33,7 +33,10 @@ public data class HttpRequest(
     val method: String,
     val url: String,
     val headers: Map<String, String> = emptyMap(),
+    /** Corps JSON. */
     val body: String? = null,
+    /** Corps binaire (image), du type donné par l'en-tête `Content-Type` ; exclusif de [body]. */
+    val bytes: ByteArray? = null,
 )
 
 public data class HttpResponse(
@@ -71,7 +74,11 @@ internal class OkHttpLiveTransport(
             Request.Builder()
                 .url(request.url)
                 .headers(request.headers.toHeaders())
-                .method(request.method, request.body?.toRequestBody(json))
+                .method(
+                    request.method,
+                    request.bytes?.toRequestBody(request.headers.entries.firstOrNull { it.key.equals("Content-Type", true) }?.value?.toMediaType())
+                        ?: request.body?.toRequestBody(json),
+                )
                 .build(),
         )
         continuation.invokeOnCancellation { call.cancel() }

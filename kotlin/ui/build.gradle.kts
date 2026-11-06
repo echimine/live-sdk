@@ -49,6 +49,8 @@ dependencies {
     implementation(libs.coil.network.okhttp)
     // Média seul (ADR 0002) ; aucun type LiveKit dans l'API publique.
     implementation(libs.livekit.android)
+    testImplementation(libs.junit)
+    testImplementation(libs.coroutines.test)
 }
 
 // JitPack : com.github.echimine.live-sdk:ui:<tag X.Y.Z> (voir jitpack.yml à la racine).

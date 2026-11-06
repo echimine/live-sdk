@@ -41,3 +41,7 @@ Propriétés disponibles : `live.serverUrl`, `live.appId`, `live.tokenSecret`.
 2. Téléphone B : pseudo « Spectateur », le Live apparaît dans la liste (titre, Hôte, `demo-android`, Audience) ; le toucher.
 3. B voit la vidéo de A en plein écran, sous la seconde ; ✕ ramène à la liste.
 4. Sur B, coller l'identifiant du Live (ou un lien `…/lives/<id>`) dans le champ de lien direct ouvre le même Live.
+5. A (Hôte) : 🛍, rechercher « bask » dans le catalogue factice, toucher « Baskets Runner X » (formulaire prérempli), **Épingler** ; la pastille apparaît chez A et B.
+6. A : 🛍, taper « panne » → « Catalogue indisponible » + « Réessayer » ; saisir un produit à la main avec une photo **Choisir** ou **Prendre**, **Remplacer le produit**.
+7. B : toucher la pastille, puis **Confirmer l'achat** → l'Annonce d'achat apparaît dans le chat et en toast chez A et B. Pendant que la fiche est ouverte sur B, changer le produit sur A : la fiche montre le nouveau avec « Le produit vient de changer ».
+8. Passer le téléphone en anglais (États-Unis) : les prix s'affichent `€89.99` au lieu de `89,99 €`.

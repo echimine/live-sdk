@@ -48,9 +48,6 @@ import fr.echimine.live.core.LiveResult
 import fr.echimine.live.core.Role
 import fr.echimine.live.core.visibleLength
 import kotlinx.coroutines.launch
-import java.text.NumberFormat
-import java.util.Currency
-import java.util.Locale
 
 /** Les 2 derniers messages, au-dessus du dock ; un tap ouvre le chat. */
 @Composable
@@ -255,9 +252,3 @@ private fun body(message: ChatMessage): String = when (message) {
         "🛍 a acheté ${message.product.name} · ${formatPrice(message.product.price, message.product.currency)}"
 }
 
-/** Prix en centimes, formaté selon la locale du téléphone. */
-internal fun formatPrice(cents: Int, currency: String): String {
-    val format = NumberFormat.getCurrencyInstance(Locale.getDefault())
-    runCatching { Currency.getInstance(currency) }.getOrNull()?.let { format.currency = it }
-    return format.format(cents / 100.0)
-}
