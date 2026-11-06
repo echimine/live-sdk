@@ -16,6 +16,32 @@ struct LifecycleTests {
         try await Self.expectNoReconnection(harness)
     }
 
+    @Test func terminerAttendLaFinDuServeurPuisExposeLeRecapitulatif() async throws {
+        let harness = Harness()
+        let (session, connection) = try await LiveSessionTests.joined(fixture: "ws/server/snapshot.host.json", harness: harness)
+        let result = Task { try await session.send(.endLive) }
+        let command = try await CommandTests.lastCommand(on: connection)
+        #expect(command["type"] == .string("endLive"))
+        connection.push(#"{"type":"ack","ref":\#(CommandTests.quoted(command["ref"]))}"#)
+        try await result.value
+        #expect(session.status == .connected)
+
+        try connection.push(fixture: "ws/server/liveEnded.host.json")
+        #expect(await eventually { session.status == .ended(.endedByHost, LiveRecap(purchases: 14, reactions: 1284, peakAudience: 52)) })
+        try await Self.expectNoReconnection(harness)
+    }
+
+    @Test func laFinChezLeSpectateurFermeLesConnexionsSansRecapitulatif() async throws {
+        let harness = Harness()
+        let (session, connection) = try await LiveSessionTests.joined(fixture: "ws/server/snapshot.viewer.json", harness: harness)
+
+        connection.push(#"{"type":"liveEnded","reason":"hostTimeout"}"#)
+
+        #expect(await eventually { session.status == .ended(.hostTimeout, nil) })
+        #expect(connection.closed)
+        try await Self.expectNoReconnection(harness)
+    }
+
     @Test func uneConnexionRemplaceeNeSeReconnectePas() async throws {
         let harness = Harness()
         let (session, connection) = try await LiveSessionTests.joined(fixture: "ws/server/snapshot.viewer.json", harness: harness)

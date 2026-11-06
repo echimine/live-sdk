@@ -78,6 +78,17 @@ private struct LiveStage: View {
     @Environment(\.liveTheme) private var theme
     @State private var chatOpen = false
     @State private var reactionsOpen = false
+    @State private var audienceOpen = false
+    @State private var recapOpen = false
+    @State private var confirmingEnd = false
+    @State private var ending = false
+    @State private var commandError: String?
+
+    private var interactive: Bool { session.status == .connected }
+    private var recap: LiveRecap? {
+        guard case .ended(_, let recap) = session.status, session.role == .host else { return nil }
+        return recap
+    }
 
     var body: some View {
         ZStack {
@@ -93,21 +104,62 @@ private struct LiveStage: View {
             }
             VStack(spacing: 12) {
                 topBar
+                if interactive && session.role != .host {
+                    HostPresenceBanner(connected: session.hostConnected)
+                }
                 Spacer()
-                RecentMessages(messages: session.messages)
-                dock
+                if interactive {
+                    RecentMessages(messages: session.messages)
+                    dock
+                } else if case .ended = session.status, recap == nil {
+                    Button("Fermer", action: onClose)
+                        .buttonStyle(.borderedProminent)
+                }
             }
             .padding(16)
         }
-        .sheet(isPresented: $chatOpen) {
-            ChatSheet(session: session)
-                .presentationDetents([.medium, .large])
-                .liveTheme(theme)
+        .sheet(isPresented: Binding(
+            get: { chatOpen || reactionsOpen || audienceOpen || recapOpen },
+            set: { if !$0 { closeSheets() } }
+        ), onDismiss: {
+            if recap != nil { onClose() }
+        }) {
+            Group {
+                if let recap {
+                    NavigationStack { LiveRecapSheet(recap: recap, onClose: closeSheets) }
+                        .interactiveDismissDisabled()
+                } else if audienceOpen {
+                    NavigationStack { AudienceSheet(audience: session.audience, onClose: closeSheets) }
+                } else if chatOpen {
+                    ChatSheet(session: session)
+                } else {
+                    ReactionsSheet(session: session)
+                }
+            }
+            .presentationDetents([.medium, .large])
+            .liveTheme(theme)
         }
-        .sheet(isPresented: $reactionsOpen) {
-            ReactionsSheet(session: session)
-                .presentationDetents([.medium])
-                .liveTheme(theme)
+        .confirmationDialog("Terminer le Live pour tous les Participants ?", isPresented: $confirmingEnd, titleVisibility: .visible) {
+            Button("Terminer le Live", role: .destructive) { Task { await endLive() } }
+            Button("Annuler", role: .cancel) {}
+        }
+        .alert("Impossible de terminer le Live", isPresented: Binding(
+            get: { commandError != nil }, set: { if !$0 { commandError = nil } }
+        )) {
+            Button("OK") { commandError = nil }
+        } message: {
+            Text(commandError ?? "Réessayez.")
+        }
+        .onChange(of: session.status, initial: true) { _, _ in
+            if !interactive {
+                confirmingEnd = false
+                commandError = nil
+                // Garder la même présentation lors du passage au récapitulatif.
+                recapOpen = recap != nil
+                chatOpen = false
+                reactionsOpen = false
+                audienceOpen = false
+            }
         }
         .background(Color.black)
         .font(theme.font(16))
@@ -123,12 +175,17 @@ private struct LiveStage: View {
                 .padding(.vertical, 6)
                 .background(theme.accent, in: RoundedRectangle(cornerRadius: theme.cornerRadius))
             Spacer()
-            CloseButton(label: "Quitter le Live") {
-                Task {
-                    await session.leave()
-                    onClose()
-                }
+            Button { audienceOpen = true } label: {
+                Label(session.audience.total.formatted(), systemImage: "eye")
+                    .font(theme.font(14, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .padding(8)
+                    .background(.black.opacity(0.45), in: Capsule())
             }
+            .accessibilityLabel("Audience : \(session.audience.total.formatted()) Spectateurs")
+            .disabled(!interactive)
+            CloseButton(label: session.role == .host && interactive ? "Terminer le Live" : "Quitter le Live", action: quit)
+                .disabled(ending)
         }
     }
 
@@ -136,6 +193,10 @@ private struct LiveStage: View {
         HStack(spacing: 12) {
             DockButton(symbol: "💬", label: "Ouvrir le chat") { chatOpen = true }
             Spacer()
+            if session.role == .host {
+                Button("Terminer le Live", role: .destructive) { confirmingEnd = true }
+                    .disabled(ending)
+            }
             Group {
                 if let quick = session.config.reactions.first {
                     QuickReactionButton(emoji: quick) {
@@ -151,12 +212,44 @@ private struct LiveStage: View {
         .frame(maxWidth: .infinity, minHeight: 48)
     }
 
+    private func closeSheets() {
+        chatOpen = false
+        reactionsOpen = false
+        audienceOpen = false
+        recapOpen = false
+    }
+
+    private func quit() {
+        if session.role == .host && interactive {
+            confirmingEnd = true
+        } else {
+            Task {
+                await session.leave()
+                onClose()
+            }
+        }
+    }
+
+    private func endLive() async {
+        guard interactive, !ending else { return }
+        ending = true
+        defer { ending = false }
+        do {
+            try await session.send(.endLive)
+        } catch {
+            if interactive {
+                commandError = error.message.isEmpty ? "Le Live n’a pas pu être terminé. Réessayez." : error.message
+            }
+        }
+    }
+
     private var statusNotice: String? {
         switch session.status {
         case .connecting: "Connexion au Live…"
         case .reconnecting: "Reconnexion…"
         case .connected: nil
-        case .ended: "Le Live est terminé."
+        case .ended(let reason, _):
+            recap != nil ? nil : (reason == .hostTimeout ? "Le Live est terminé : l’Hôte n’est pas revenu." : "Le Live est terminé.")
         case .replaced: "Ce Live est ouvert sur un autre appareil."
         case .banned: "Vous avez été exclu de ce Live."
         case .failed(.liveNotFound): "Ce Live n'existe pas ou est terminé."
@@ -202,5 +295,38 @@ private struct QuickReactionButton: View {
             .accessibilityAddTraits(.isButton)
             .accessibilityAction { if isEnabled { onTap() } }
             .accessibilityAction(named: "Toutes les Réactions") { if isEnabled { onLongPress() } }
+    }
+}
+
+private struct HostPresenceBanner: View {
+    let connected: Bool
+    @Environment(\.liveTheme) private var theme
+    @State private var returned = false
+    @State private var wasDisconnected = false
+
+    var body: some View {
+        VStack(spacing: 0) {
+            if !connected || returned {
+                Text(connected ? "Hôte revenu" : "Hôte déconnecté")
+                    .font(theme.font(15, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
+                    .background(.black.opacity(0.6), in: RoundedRectangle(cornerRadius: theme.cornerRadius))
+                    .accessibilityAddTraits(.updatesFrequently)
+            }
+        }
+        .task(id: connected) {
+            if !connected {
+                wasDisconnected = true
+                returned = false
+                return
+            }
+            guard wasDisconnected else { return }
+            returned = true
+            do { try await Task.sleep(for: .seconds(3)) } catch { return }
+            returned = false
+            wasDisconnected = false
+        }
     }
 }

@@ -77,6 +77,18 @@ struct LiveSessionTests {
         #expect(await eventually { session.reactionsTotal == 1311 })
     }
 
+    @Test func lAudienceRemplaceLeTotalEtLaRepartitionParApp() async throws {
+        let (session, connection) = try await Self.joined(fixture: "ws/server/snapshot.viewer.json")
+
+        try connection.push(fixture: "ws/server/audience.json")
+        #expect(await eventually { session.audience.total == 38 })
+        #expect(session.audience.byApp["twitch"] == 10)
+
+        connection.push(#"{"type":"audience","total":0,"byApp":{}}"#)
+        #expect(await eventually { session.audience == .empty })
+        await session.leave()
+    }
+
     @Test func lAbsencePuisLeRetourDeLHoteSontVisibles() async throws {
         let (session, connection) = try await Self.joined(fixture: "ws/server/snapshot.viewer.json")
 
