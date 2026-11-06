@@ -1,5 +1,5 @@
-# JitPack construit le SDK Kotlin, qui vit dans kotlin/ : com.github.echimine.live-sdk:core:<tag>
+# JitPack construit le SDK Kotlin, qui vit dans kotlin/ : com.github.echimine.live-sdk:core:<tag> et :ui:<tag>
 jdk:
   - openjdk17
 install:
-  - cd kotlin && ./gradlew :core:publishReleasePublicationToMavenLocal --console=plain
+  - cd kotlin && ./gradlew :core:publishReleasePublicationToMavenLocal :ui:publishReleasePublicationToMavenLocal --console=plain

@@ -367,4 +367,22 @@ class LiveTest {
         assertEquals(listOf("msg_0193", "msg_0194"), live.details().messages.map { it.id })
         client.close()
     }
+
+    @OptIn(InternalLiveSdkApi::class)
+    @Test
+    fun leSnapshotDonneLAccesMediaDuLive() = runTest {
+        val client = configure()
+        val live = client.openLive("lv_8f3k2m")
+        runCurrent()
+        assertNull(live.media.value)
+
+        transport.socket.push(fixture("ws/server/snapshot.viewer.json"))
+        runCurrent()
+
+        assertEquals(
+            MediaAccess("wss://livekit.echimine.fr", "eyJhbGciOiJIUzI1NiJ9.bGl2ZWtpdC1leGVtcGxl.c2lnbmF0dXJl"),
+            live.media.value,
+        )
+        client.close()
+    }
 }

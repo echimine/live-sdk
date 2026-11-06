@@ -126,6 +126,13 @@ public class Live internal constructor(
     public val state: StateFlow<LiveState> = stateFlow.asStateFlow()
     public val events: SharedFlow<LiveEvent> = eventFlow.asSharedFlow()
 
+    @OptIn(InternalLiveSdkApi::class)
+    private val mediaFlow = MutableStateFlow<MediaAccess?>(null)
+
+    /** Accès média du dernier `snapshot`, `null` avant le premier. */
+    @InternalLiveSdkApi
+    public val media: StateFlow<MediaAccess?> = mediaFlow.asStateFlow()
+
     internal fun start() {
         scope.launch { run() }
     }
@@ -259,6 +266,8 @@ public class Live internal constructor(
                 when (val message = Wire.decodeServerMessage(text) ?: continue) {
                     is ServerMessage.Snapshot -> {
                         caughtUp = true
+                        @OptIn(InternalLiveSdkApi::class)
+                        mediaFlow.value = MediaAccess(message.livekit.url, message.livekit.token)
                         stateFlow.value = LiveState(LiveState.Connection.Connected, message.toDetails())
                         activeSocket = socket
                     }
