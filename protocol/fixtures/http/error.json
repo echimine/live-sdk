@@ -1,0 +1,6 @@
+{
+  "error": {
+    "code": "rate_limited",
+    "message": "Trop de requêtes, réessayez plus tard."
+  }
+}

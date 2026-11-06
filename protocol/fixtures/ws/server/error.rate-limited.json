@@ -1,0 +1,7 @@
+{
+  "type": "error",
+  "ref": "c8",
+  "code": "rate_limited",
+  "message": "Doucement…",
+  "retryAfterMs": 4200
+}

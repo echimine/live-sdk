@@ -1,0 +1,11 @@
+{
+  "type": "audience",
+  "total": 38,
+  "byApp": {
+    "tiktok": 12,
+    "twitch": 10,
+    "instagram": 8,
+    "snapcore": 5,
+    "strava": 3
+  }
+}

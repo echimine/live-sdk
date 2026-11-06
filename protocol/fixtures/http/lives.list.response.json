@@ -1,0 +1,26 @@
+{
+  "lives": [
+    {
+      "id": "lv_8f3k2m",
+      "title": "Unboxing des nouvelles baskets",
+      "host": {
+        "id": "tiktok:u_1042",
+        "app": "tiktok",
+        "name": "Léa",
+        "picture": "https://cdn.tiktok-clone.example/avatars/1042.jpg"
+      },
+      "audience": 37,
+      "startedAt": "2026-11-06T18:02:11.000Z"
+    },
+    {
+      "id": "lv_2b9q7x",
+      "host": {
+        "id": "strava:u_77",
+        "app": "strava",
+        "name": "Marc"
+      },
+      "audience": 4,
+      "startedAt": "2026-11-06T18:15:40.000Z"
+    }
+  ]
+}

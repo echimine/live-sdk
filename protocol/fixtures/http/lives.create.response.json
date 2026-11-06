@@ -1,0 +1,14 @@
+{
+  "live": {
+    "id": "lv_8f3k2m",
+    "title": "Unboxing des nouvelles baskets",
+    "host": {
+      "id": "tiktok:u_1042",
+      "app": "tiktok",
+      "name": "Léa",
+      "picture": "https://cdn.tiktok-clone.example/avatars/1042.jpg"
+    },
+    "audience": 0,
+    "startedAt": "2026-11-06T18:02:11.000Z"
+  }
+}

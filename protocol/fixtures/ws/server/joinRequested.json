@@ -1,0 +1,8 @@
+{
+  "type": "joinRequested",
+  "participant": {
+    "id": "twitch:u_88",
+    "app": "twitch",
+    "name": "Noa"
+  }
+}

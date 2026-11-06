@@ -1,0 +1,13 @@
+{
+  "reactions": ["❤️", "😂", "😮", "👏", "🔥", "😢", "😍", "🎉", "💯", "👍", "🤯", "🙏"],
+  "chat": {
+    "maxLength": 300
+  },
+  "images": {
+    "maxBytes": 10485760,
+    "formats": ["image/jpeg", "image/png", "image/webp"]
+  },
+  "product": {
+    "nameMaxLength": 80
+  }
+}

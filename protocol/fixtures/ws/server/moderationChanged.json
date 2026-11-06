@@ -1,0 +1,17 @@
+{
+  "type": "moderationChanged",
+  "shadowbanned": [
+    {
+      "id": "instagram:u_5521",
+      "app": "instagram",
+      "name": "Inès"
+    }
+  ],
+  "banned": [
+    {
+      "id": "strava:u_13",
+      "app": "strava",
+      "name": "Troll"
+    }
+  ]
+}

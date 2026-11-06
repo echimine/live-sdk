@@ -1,0 +1,6 @@
+{
+  "type": "error",
+  "ref": "c14",
+  "code": "not_animator",
+  "message": "Seuls les Animateurs peuvent modérer."
+}

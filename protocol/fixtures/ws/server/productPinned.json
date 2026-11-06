@@ -1,0 +1,10 @@
+{
+  "type": "productPinned",
+  "product": {
+    "id": "prd_7a21",
+    "name": "Baskets Runner X",
+    "price": 8999,
+    "currency": "EUR",
+    "imageUrl": "https://live.echimine.fr/v1/images/img_5d1c9a.webp"
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "type": "liveEnded",
+  "reason": "endedByHost",
+  "summary": {
+    "purchases": 14,
+    "reactions": 1284,
+    "peakAudience": 52
+  }
+}

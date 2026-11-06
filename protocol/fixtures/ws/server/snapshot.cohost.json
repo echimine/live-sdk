@@ -1,0 +1,99 @@
+{
+  "type": "snapshot",
+  "live": {
+    "id": "lv_8f3k2m",
+    "title": "Unboxing des nouvelles baskets",
+    "startedAt": "2026-11-06T18:02:11.000Z"
+  },
+  "you": {
+    "id": "snapcore:u_310",
+    "app": "snapcore",
+    "name": "Sam",
+    "picture": "https://snapcore.example/a/310.png"
+  },
+  "role": "cohost",
+  "host": {
+    "id": "tiktok:u_1042",
+    "app": "tiktok",
+    "name": "Léa",
+    "picture": "https://cdn.tiktok-clone.example/avatars/1042.jpg"
+  },
+  "hostConnected": true,
+  "cohosts": [
+    {
+      "id": "snapcore:u_310",
+      "app": "snapcore",
+      "name": "Sam",
+      "picture": "https://snapcore.example/a/310.png"
+    }
+  ],
+  "pinnedProduct": {
+    "id": "prd_7a21",
+    "name": "Baskets Runner X",
+    "price": 8999,
+    "currency": "EUR",
+    "imageUrl": "https://live.echimine.fr/v1/images/img_5d1c9a.webp"
+  },
+  "audience": {
+    "total": 37,
+    "byApp": {
+      "tiktok": 12,
+      "twitch": 9,
+      "instagram": 8,
+      "snapcore": 5,
+      "strava": 3
+    }
+  },
+  "reactionsTotal": 1284,
+  "messages": [
+    {
+      "id": "msg_0193",
+      "kind": "text",
+      "author": {
+        "id": "twitch:u_88",
+        "app": "twitch",
+        "name": "Noa"
+      },
+      "role": "viewer",
+      "text": "Elles existent en 42 ?",
+      "at": "2026-11-06T18:05:02.120Z"
+    },
+    {
+      "id": "msg_0194",
+      "kind": "purchase",
+      "author": {
+        "id": "instagram:u_5521",
+        "app": "instagram",
+        "name": "Inès"
+      },
+      "role": "viewer",
+      "product": {
+        "id": "prd_7a21",
+        "name": "Baskets Runner X",
+        "price": 8999,
+        "currency": "EUR"
+      },
+      "at": "2026-11-06T18:05:30.450Z"
+    }
+  ],
+  "livekit": {
+    "url": "wss://livekit.echimine.fr",
+    "token": "eyJhbGciOiJIUzI1NiJ9.bGl2ZWtpdC1leGVtcGxl.c2lnbmF0dXJl"
+  },
+  "moderation": {
+    "shadowbanned": [
+      {
+        "id": "instagram:u_5521",
+        "app": "instagram",
+        "name": "Inès"
+      }
+    ],
+    "banned": [
+      {
+        "id": "strava:u_13",
+        "app": "strava",
+        "name": "Troll"
+      }
+    ]
+  }
+}

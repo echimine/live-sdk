@@ -1,0 +1,32 @@
+{
+  "type": "snapshot",
+  "live": {
+    "id": "lv_2b9q7x",
+    "startedAt": "2026-11-06T18:15:40.000Z"
+  },
+  "you": {
+    "id": "twitch:u_88",
+    "app": "twitch",
+    "name": "Noa"
+  },
+  "role": "viewer",
+  "host": {
+    "id": "strava:u_77",
+    "app": "strava",
+    "name": "Marc"
+  },
+  "hostConnected": false,
+  "cohosts": [],
+  "audience": {
+    "total": 1,
+    "byApp": {
+      "twitch": 1
+    }
+  },
+  "reactionsTotal": 0,
+  "messages": [],
+  "livekit": {
+    "url": "wss://livekit.echimine.fr",
+    "token": "eyJhbGciOiJIUzI1NiJ9.bWluaW1hbA.c2ln"
+  }
+}

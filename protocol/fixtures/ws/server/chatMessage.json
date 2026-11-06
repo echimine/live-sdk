@@ -1,0 +1,15 @@
+{
+  "type": "chatMessage",
+  "message": {
+    "id": "msg_0193",
+    "kind": "text",
+    "author": {
+      "id": "twitch:u_88",
+      "app": "twitch",
+      "name": "Noa"
+    },
+    "role": "viewer",
+    "text": "Elles existent en 42 ?",
+    "at": "2026-11-06T18:05:02.120Z"
+  }
+}
