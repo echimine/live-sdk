@@ -180,8 +180,9 @@ class LiveSocket implements Connection {
     const message = parsed.data;
     switch (message.type) {
       case "join":
-      case "react":
         return;
+      case "react":
+        return this.deps.lives.react(presence, message.emoji);
       case "endLive":
         return this.run(message.ref, (accepted) => this.deps.lives.endLive(presence, accepted));
       case "sendMessage":

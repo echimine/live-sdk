@@ -1,0 +1,1 @@
+ALTER TABLE "lives" ADD COLUMN "reactions_total" integer DEFAULT 0 NOT NULL;
