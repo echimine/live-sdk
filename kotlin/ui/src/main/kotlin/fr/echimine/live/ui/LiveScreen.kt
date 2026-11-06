@@ -1,12 +1,14 @@
 package fr.echimine.live.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -23,6 +25,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -41,6 +47,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import fr.echimine.live.core.Live
 import fr.echimine.live.core.LiveClient
+import fr.echimine.live.core.LiveEvent
 import fr.echimine.live.core.LiveSdk
 import fr.echimine.live.core.LiveState
 import fr.echimine.live.core.LiveState.Connection
@@ -82,11 +89,19 @@ public fun LiveScreen(
 ) {
     DisposableEffect(live) { onDispose { live.close() } }
     val state by live.state.collectAsStateWithLifecycle()
+    val config by live.config.collectAsStateWithLifecycle()
     val room = rememberLiveRoom(live)
     val details = state.live
     val host = details?.host
     val hostIsYou = host != null && host.id == details.you.id
     val camera by rememberCameraTrack(room, host?.id, hostIsYou)
+    val interactive = details != null && !state.connection.isFinal
+    var chatOpen by rememberSaveable(live.id) { mutableStateOf(false) }
+    var reactionsOpen by rememberSaveable(live.id) { mutableStateOf(false) }
+    val floating = remember(live) { FloatingReactions() }
+    LaunchedEffect(live) {
+        live.events.collect { event -> if (event is LiveEvent.ReactionsReceived) floating.launch(event.counts) }
+    }
 
     LiveSdkTheme {
         Box(modifier.fillMaxSize().background(Color.Black)) {
@@ -96,11 +111,56 @@ public fun LiveScreen(
                 TopBar(state, onClose)
                 Box(Modifier.weight(1f).fillMaxWidth(), Alignment.Center) {
                     StatusOverlay(state, hasVideo = camera != null, onClose = onClose)
+                    FloatingReactionsLayer(
+                        floating,
+                        Modifier.align(Alignment.BottomEnd).width(120.dp).fillMaxHeight(0.7f),
+                    )
                 }
-                Dock {}
+                if (interactive) {
+                    ChatPreview(
+                        details.messages,
+                        onOpen = { chatOpen = true },
+                        modifier = Modifier.padding(horizontal = 8.dp).fillMaxWidth(0.75f),
+                    )
+                }
+                Dock {
+                    if (interactive) {
+                        ChatPill(onClick = { chatOpen = true })
+                        val quick = config.quickReaction
+                        QuickReactionButton(quick, onReact = { live.react(quick) }, onOpenAll = { reactionsOpen = true })
+                        DockButton(
+                            "😀",
+                            description = "Toutes les Réactions",
+                            modifier = Modifier.clickable { reactionsOpen = true },
+                        )
+                    }
+                }
+            }
+            if (chatOpen && interactive) {
+                ChatSheet(live, config, details.messages, state.chatLocked, onDismiss = { chatOpen = false })
+            }
+            if (reactionsOpen && interactive) {
+                ReactionSheet(config.reactions, onReact = live::react, onDismiss = { reactionsOpen = false })
             }
         }
     }
+}
+
+/** Le 💬 du dock : ouvre le chat. */
+@Composable
+private fun RowScope.ChatPill(onClick: () -> Unit) {
+    Text(
+        "💬  Ajouter un message…",
+        color = Color.White.copy(alpha = 0.85f),
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        modifier = Modifier
+            .weight(1f)
+            .clip(CircleShape)
+            .background(Color.Black.copy(alpha = 0.35f))
+            .clickable(onClickLabel = "Ouvrir le chat", onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+    )
 }
 
 @Composable
@@ -162,7 +222,7 @@ private fun TopBar(state: LiveState, onClose: () -> Unit) {
     }
 }
 
-/** Le dock, en bas : vide pour l'instant, il accueillera les actions du Live (💬, ❤️, 😀, 🛍, 👥, ✋). */
+/** Le dock, en bas : 💬 chat, ❤️ Réaction rapide, 😀 toutes les Réactions (puis 🛍, 👥, ✋). */
 @Composable
 private fun Dock(content: @Composable RowScope.() -> Unit) {
     Row(

@@ -17,10 +17,3 @@ internal fun limitGraphemes(text: String, max: Int): String {
     }
     return text.substring(0, end)
 }
-
-internal fun graphemeCount(text: String): Int {
-    val graphemes = graphemes(text)
-    var count = 0
-    while (graphemes.next() != BreakIterator.DONE) count++
-    return count
-}

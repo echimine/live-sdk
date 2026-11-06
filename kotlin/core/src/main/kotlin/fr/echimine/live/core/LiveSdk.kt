@@ -124,7 +124,7 @@ public class LiveClient internal constructor(
         withTimeoutOrNull(CONFIG_WAIT) { refreshConfigIfStale() }
         val path = URLEncoder.encode(id, "UTF-8").replace("+", "%20")
         val wsUrl = webSocketBase() + "/v1/lives/$path/ws"
-        return Live(id, wsUrl, tokenProvider, transport, scope, dispatcher).also { it.start() }
+        return Live(id, wsUrl, tokenProvider, transport, config, scope, dispatcher, timeSource).also { it.start() }
     }
 
     /** Ferme le client et tous les Lives qu'il a ouverts. */
