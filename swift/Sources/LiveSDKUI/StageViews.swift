@@ -1,14 +1,18 @@
 import LiveSDK
 import SwiftUI
 
-/// ⚙️ Gestion de l'Hôte : Demandes de montée à accepter ou refuser, Co-hôtes à retirer.
-struct StageManagementSheet: View {
+/// ⚙️ Gestion des Animateurs : Demandes de montée et Co-hôtes (Hôte), Produit épinglé,
+/// Shadowbans à lever, et fin du Live (Hôte).
+struct ManagementSheet: View {
     let session: LiveSession
+    let productSource: (any ProductSource)?
+    let onEndLive: () -> Void
     let onClose: () -> Void
     @Environment(\.liveTheme) private var theme
     @State private var busy: Set<String> = []
     @State private var error: String?
 
+    private var isHost: Bool { session.role == .host }
     private var stageFull: Bool { session.cohosts.count >= LiveSession.maxCohosts }
 
     var body: some View {
@@ -19,43 +23,15 @@ struct StageManagementSheet: View {
                         .foregroundStyle(.red)
                 }
             }
-            Section {
-                if session.joinRequests.isEmpty {
-                    Text("Aucune Demande de montée.")
-                }
-                ForEach(session.joinRequests) { participant in
-                    HStack {
-                        ParticipantRow(participant: participant)
-                        Spacer()
-                        Button("Refuser") { run(.declineJoin(participantId: participant.id), for: participant) }
-                            .buttonStyle(.bordered)
-                        Button("Accepter") { run(.acceptJoin(participantId: participant.id), for: participant) }
-                            .buttonStyle(.borderedProminent)
-                            .disabled(stageFull)
-                    }
-                    .disabled(busy.contains(participant.id))
-                }
-            } header: {
-                Text("Demandes de montée")
-            } footer: {
-                if stageFull && !session.joinRequests.isEmpty {
-                    Text(Self.stageFullMessage)
-                }
+            if isHost {
+                joinRequestsSection
+                cohostsSection
             }
-            Section("Co-hôtes (\(session.cohosts.count)/\(LiveSession.maxCohosts))") {
-                if session.cohosts.isEmpty {
-                    Text("Personne n’est monté à l’écran.")
-                }
-                ForEach(session.cohosts) { participant in
-                    HStack {
-                        ParticipantRow(participant: participant)
-                        Spacer()
-                        Button("Retirer", role: .destructive) {
-                            run(.removeCohost(participantId: participant.id), for: participant)
-                        }
-                        .buttonStyle(.bordered)
-                    }
-                    .disabled(busy.contains(participant.id))
+            productSection
+            shadowbansSection
+            if isHost {
+                Section {
+                    Button("Terminer le Live", role: .destructive, action: onEndLive)
                 }
             }
         }
@@ -63,6 +39,89 @@ struct StageManagementSheet: View {
         .tint(theme.accent)
         .navigationTitle("Gestion")
         .toolbar { Button("Fermer", action: onClose) }
+    }
+
+    private var joinRequestsSection: some View {
+        Section {
+            if session.joinRequests.isEmpty {
+                Text("Aucune Demande de montée.")
+            }
+            ForEach(session.joinRequests) { participant in
+                HStack {
+                    ParticipantRow(participant: participant)
+                    Spacer()
+                    Button("Refuser") { run(.declineJoin(participantId: participant.id), for: participant) }
+                        .buttonStyle(.bordered)
+                    Button("Accepter") { run(.acceptJoin(participantId: participant.id), for: participant) }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(stageFull)
+                }
+                .disabled(busy.contains(participant.id))
+            }
+        } header: {
+            Text("Demandes de montée")
+        } footer: {
+            if stageFull && !session.joinRequests.isEmpty {
+                Text(Self.stageFullMessage)
+            }
+        }
+    }
+
+    private var cohostsSection: some View {
+        Section("Co-hôtes (\(session.cohosts.count)/\(LiveSession.maxCohosts))") {
+            if session.cohosts.isEmpty {
+                Text("Personne n’est monté à l’écran.")
+            }
+            ForEach(session.cohosts) { participant in
+                HStack {
+                    ParticipantRow(participant: participant)
+                    Spacer()
+                    Button("Retirer", role: .destructive) {
+                        run(.removeCohost(participantId: participant.id), for: participant)
+                    }
+                    .buttonStyle(.bordered)
+                }
+                .disabled(busy.contains(participant.id))
+            }
+        }
+    }
+
+    private var productSection: some View {
+        Section("Produit épinglé") {
+            if let product = session.pinnedProduct {
+                Text("\(product.name) · \(PriceText.format(cents: product.price, currency: product.currency))")
+            } else {
+                Text("Aucun produit épinglé.")
+            }
+            NavigationLink(session.pinnedProduct == nil ? "Épingler un produit" : "Changer le produit") {
+                ProductSheet(session: session, source: productSource)
+            }
+        }
+    }
+
+    private var shadowbansSection: some View {
+        Section {
+            let shadowbanned = session.moderation?.shadowbanned ?? []
+            if session.moderation == nil {
+                // Monté à l'écran en cours de Live : le serveur n'envoie les listes qu'au prochain changement.
+                Text("Liste disponible à la prochaine modération.")
+            } else if shadowbanned.isEmpty {
+                Text("Aucun Participant en Shadowban.")
+            }
+            ForEach(shadowbanned) { participant in
+                HStack {
+                    ParticipantRow(participant: participant)
+                    Spacer()
+                    Button("Lever") { run(.unshadowban(participantId: participant.id), for: participant) }
+                        .buttonStyle(.bordered)
+                }
+                .disabled(busy.contains(participant.id))
+            }
+        } header: {
+            Text("Shadowbans")
+        } footer: {
+            Text("Leurs messages ne sont visibles que d’eux-mêmes, sans qu’ils le sachent.")
+        }
     }
 
     private func run(_ command: LiveCommand, for participant: LiveParticipant) {

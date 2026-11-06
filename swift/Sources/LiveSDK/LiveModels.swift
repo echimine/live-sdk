@@ -122,3 +122,11 @@ public enum LiveErrorCode: String, Sendable, Codable {
         self = LiveErrorCode(rawValue: raw) ?? .unknown
     }
 }
+
+/// Ce qu'un Animateur peut faire sur un message du chat (voir `LiveSession.moderationActions(for:)`).
+public enum ModerationAction: Sendable, Hashable {
+    case deleteMessage
+    case shadowban
+    case unshadowban
+    case ban
+}

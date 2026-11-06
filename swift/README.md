@@ -84,6 +84,15 @@ La vidéo est une mosaïque portrait de 6 personnes au plus (`StageMosaic`) : 1 
 - Hôte : ⚙️ Gestion porte le nombre de Demandes de montée en attente, permet d’accepter, refuser et retirer un Co-hôte, avec le compte `n/5` (`LiveSession.maxCohosts`) ; `cohost_limit` est affiché.
 - Co-hôte : « Redescendre », après confirmation.
 
+## Modération et ⚙️ Gestion
+
+La modération ne vaut que pour le Live en cours. `session.moderationActions(for:)` rend ce qu’un Animateur peut faire sur un message, selon les règles du serveur : rien pour un Spectateur ; seulement supprimer un message de l’Hôte, de soi-même, d’un Participant déjà banni, ou d’un Co-hôte quand on est Co-hôte (seul l’Hôte modère un Co-hôte) ; sinon supprimer, Shadowban (ou « Lever le Shadowban ») et Bannissement. Les commandes passent par `session.send(.deleteMessage / .shadowban / .unshadowban / .ban)`.
+
+- Écrans : toucher un message (chat ou deux derniers messages) ouvre ces actions ; une erreur (`not_animator`, `not_found`) est affichée.
+- ⚙️ Gestion, ouverte à l’Hôte et aux Co-hôtes : Demandes de montée et Co-hôtes (Hôte), épingler ou changer le Produit épinglé, Shadowbans à lever, « Terminer le Live » (Hôte).
+- `session.moderation` (listes servies aux seuls Animateurs) ne contient jamais le Participant lui-même et redevient `nil` quand il redescend Spectateur : rien ne révèle un Shadowban. Un Co-hôte monté en cours de Live reçoit les listes au prochain changement.
+- Participant banni : `status == .banned`, l’écran affiche « Vous avez été exclu de ce Live » et un bouton Fermer ; la session ne se reconnecte pas, d’autres Lives restent ouverts à lui.
+
 ## Vérification manuelle (iOS 17+)
 
 La spécification #19 prévoit une vérification manuelle des écrans, sans tests UI automatisés en v1. Avec le serveur local et deux Participants :
@@ -95,6 +104,7 @@ La spécification #19 prévoit une vérification manuelle des écrans, sans test
 5. Refaire avec l’Hôte absent plus de 60 secondes : vérifier le motif de fin chez le Spectateur. Vérifier aussi le remplacement de connexion et le Bannissement.
 6. Appeler deux fois `startLive` depuis le même Hôte : vérifier le même identifiant et le titre initial. Vérifier les commandes refusées et la possibilité de réessayer.
 7. Co-hôtes : depuis un Spectateur, ✋ puis annuler ; vérifier le badge de ⚙️ chez l’Hôte. Redemander, accepter : la caméra du Co-hôte apparaît sans reconnexion, chez tous, à la bonne place. Monter jusqu’à 6 personnes (1, 2, 2 × 2, 2 × 3), tenter une 6e acceptation (`cohost_limit`), retirer un Co-hôte, puis faire redescendre un Co-hôte de lui-même.
+8. Modération : depuis l’Hôte, toucher un message d’un Spectateur, le supprimer (disparaît chez tous), mettre son auteur en Shadowban (ses messages ne sont plus vus que de lui, et rien ne change de son côté), lever le Shadowban dans ⚙️ Gestion, puis le bannir (exclu immédiatement avec un message, il rejoint un autre Live sans souci). Depuis un Co-hôte, vérifier que le message d’un autre Co-hôte ne propose que la suppression ; épingler puis changer le produit depuis ⚙️ Gestion.
 
 Validation automatisée : `swift test`, puis `xcodebuild -scheme LiveSDK-Package -destination 'generic/platform=iOS Simulator' -quiet build`.
 

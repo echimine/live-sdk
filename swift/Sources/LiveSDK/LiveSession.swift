@@ -183,6 +183,19 @@ public final class LiveSession {
         }
     }
 
+    /// Les actions permises sur ce message à l'instant : aucune pour un Spectateur.
+    public func moderationActions(for message: ChatMessage) -> [ModerationAction] {
+        guard role == .host || role == .cohost else { return [] }
+        let author = message.author.id
+        // Le serveur ne laisse modérer ni l'Hôte, ni un Co-hôte sauf par l'Hôte (`not_animator`).
+        let protected = author == host?.id || author == you?.id
+            || (role != .host && cohosts.contains { $0.id == author })
+        let banned = moderation?.banned.contains { $0.id == author } == true
+        if protected || banned { return [.deleteMessage] }
+        let shadowbanned = moderation?.shadowbanned.contains { $0.id == author } == true
+        return [.deleteMessage, shadowbanned ? .unshadowban : .shadowban, .ban]
+    }
+
     public func react(_ emoji: String) {
         guard config.reactions.contains(emoji), status == .connected, let connection,
               let text = try? Self.encode(.react(emoji: emoji))
@@ -369,7 +382,7 @@ public final class LiveSession {
         case .joinRequestCancelled(let participantId):
             joinRequests.removeAll { $0.id == participantId }
         case .moderationChanged(let lists):
-            moderation = lists
+            moderation = withoutYou(lists)
         default:
             break
         }
@@ -433,6 +446,8 @@ public final class LiveSession {
         if change.participant.id == you?.id {
             role = change.role
             joinRequestPending = false
+            // Les listes de modération sont réservées aux Animateurs, comme dans le `snapshot`.
+            if change.role == .viewer { moderation = nil }
         }
     }
 
@@ -451,7 +466,16 @@ public final class LiveSession {
         joinRequests = snapshot.joinRequests ?? []
         // Les Demandes de montée en attente ne survivent pas à la fermeture du socket.
         joinRequestPending = false
-        moderation = snapshot.moderation
+        moderation = withoutYou(snapshot.moderation)
+    }
+
+    /// Un Animateur mis en Shadowban ne doit pas l'apprendre : il n'apparaît jamais dans ses propres listes.
+    private func withoutYou(_ lists: Moderation?) -> Moderation? {
+        guard let lists, let you else { return lists }
+        return Moderation(
+            shadowbanned: lists.shadowbanned.filter { $0.id != you.id },
+            banned: lists.banned.filter { $0.id != you.id }
+        )
     }
 }
 
