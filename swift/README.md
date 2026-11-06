@@ -87,3 +87,19 @@ La spécification #19 prévoit une vérification manuelle des écrans, sans test
 6. Appeler deux fois `startLive` depuis le même Hôte : vérifier le même identifiant et le titre initial. Vérifier les commandes refusées et la possibilité de réessayer.
 
 Validation automatisée : `swift test`, puis `xcodebuild -scheme LiveSDK-Package -destination 'generic/platform=iOS Simulator' -quiet build`.
+
+### Produits et achats
+
+Le cœur expose `session.pinProduct(name:price:currency:image:)`, `unpinProduct()` et
+`purchase(productId:)`. Le prix est exprimé en centimes. `ProductImage.url` transmet
+une URL HTTPS de catalogue ; `.data` réduit et oriente la photo à 1 024 px maximum,
+puis envoie un JPEG authentifié à `POST /v1/images` avant la commande d’épinglage.
+Un échec d’envoi ne remplace pas le produit existant.
+
+Les écrans acceptent une source facultative via `.productSource(MyProductSource())`.
+Implémentez `ProductSource.searchProducts(matching:)` et renvoyez des
+`ProductSuggestion` (initialiseur public). Les recherches sont différées de 300 ms,
+annulées à la frappe suivante et limitées à 5 secondes et 20 résultats valides.
+La saisie manuelle reste accessible en cas d’erreur. La fiche conserve l’identifiant
+présenté lors de son ouverture : `product_changed` invite à rouvrir le nouveau produit.
+Les achats sont simulés ; annonces et prix utilisent la locale du téléphone.
