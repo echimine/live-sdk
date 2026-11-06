@@ -31,7 +31,9 @@ export const databaseUrl = process.env.DATABASE_URL ?? "postgres://live:live@loc
 export const now = new Date("2026-11-06T18:00:00.000Z");
 
 export function testEnv(overrides: Partial<ServerEnv> = {}): ServerEnv {
-  return { DATABASE_URL: databaseUrl, MEMBER_APPS_FILE: memberAppsFile, ...overrides };
+  // Dossier d'images propre à chaque serveur de test.
+  const IMAGES_DIR = mkdtempSync(join(tmpdir(), "live-sdk-images-"));
+  return { DATABASE_URL: databaseUrl, MEMBER_APPS_FILE: memberAppsFile, IMAGES_DIR, ...overrides };
 }
 
 /**
@@ -84,7 +86,7 @@ export async function startLiveServer(
 export async function resetDatabase(): Promise<void> {
   const sql = postgres(databaseUrl, { max: 1, onnotice: () => {} });
   try {
-    await sql`truncate table live_cohosts, chat_messages, lives`;
+    await sql`truncate table purchases, chat_messages, products, live_cohosts, lives`;
   } finally {
     await sql.end({ timeout: 1 });
   }

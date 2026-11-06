@@ -11,11 +11,13 @@ import { z } from "zod";
 import { ChatStore } from "./chat-store.js";
 import { type Clock, systemClock } from "./clock.js";
 import { checkHealth } from "./health.js";
+import { ImageStore, sniffImageType } from "./images.js";
 import { attachLiveSockets } from "./live-socket.js";
 import { LiveStore } from "./live-store.js";
 import { createLivekitPort, type LivekitPort } from "./livekit.js";
 import { Lives } from "./lives.js";
 import { loadMemberApps } from "./member-apps.js";
+import { ProductStore } from "./product-store.js";
 import { Quota } from "./rate-limit.js";
 import { InvalidParticipantToken, verifyParticipantToken } from "./participant-token.js";
 import { type HttpError, LivesCreateRequest, type Participant } from "./protocol/index.js";
@@ -36,6 +38,10 @@ const ServerEnv = z.object({
    * L'IP du client, pour les quotas, est alors lue dans `X-Forwarded-For`.
    */
   TRUST_PROXY: z.string().regex(/^\d$/, "nombre de proxys, de 0 à 9").default("0").transform(Number),
+  /** Dossier des images du Produit épinglé (volume en production). */
+  IMAGES_DIR: z.string().min(1).default("/data/images"),
+  /** Adresse publique du serveur commun, en https : base des URL d'images rendues aux SDK. */
+  PUBLIC_URL: z.url({ protocol: /^https$/ }).default("https://live.echimine.fr"),
 });
 export type ServerEnv = z.input<typeof ServerEnv>;
 
@@ -120,6 +126,7 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
   const livekit = options.livekit ?? livekitFromEnv(env);
   const memberApps = loadMemberApps(env.MEMBER_APPS_FILE);
   const config = loadServedConfig(options.configFile ?? defaultConfigFile);
+  const images = new ImageStore(env.IMAGES_DIR, env.PUBLIC_URL);
 
   const logger = options.logger ?? false;
   const server = Fastify({
@@ -132,6 +139,7 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
   });
   const quotas = {
     launch: new Quota(5, 60_000, clock),
+    imageUpload: new Quota(10, 60_000, clock),
     publicGet: new Quota(60, 60_000, clock),
   };
   const byParticipant = (request: FastifyRequest) => request.participant.id;
@@ -143,6 +151,7 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
   const lives = new Lives({
     store: new LiveStore(db),
     chat: new ChatStore(db),
+    products: new ProductStore(db),
     livekit,
     clock,
     log: server.log,
@@ -161,10 +170,12 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
   });
 
   // `GET` publics (`/v1/…`) : par IP, avant toute authentification. `/health` et
-  // `/admin/state` restent joignables même quand l'IP de la salle est saturée.
+  // `/admin/state` restent joignables même quand l'IP de la salle est saturée. Les
+  // images, fichiers immuables que chaque téléphone de la salle charge, n'y comptent pas.
   const publicGetQuota = quota(quotas.publicGet, (request) => request.ip);
   server.addHook("onRequest", async (request, reply) => {
-    if ((request.method === "GET" || request.method === "HEAD") && request.url.startsWith("/v1/")) {
+    const isGet = request.method === "GET" || request.method === "HEAD";
+    if (isGet && request.url.startsWith("/v1/") && !request.url.startsWith("/v1/images/")) {
       return publicGetQuota(request, reply);
     }
   });
@@ -192,12 +203,29 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
     });
   }
 
-  // Corps illisible (JSON invalide…) : erreur au format du contrat. Les autres statuts restent ceux de Fastify.
-  server.setErrorHandler((error: { statusCode?: number }, _request, reply) => {
+  // Corps illisible (JSON invalide…) ou trop gros : erreur au format du contrat. Les autres statuts restent ceux de Fastify.
+  server.setErrorHandler((error: { statusCode?: number }, request, reply) => {
     if (error.statusCode === 400) {
       return sendError(reply, 400, { code: "invalid_request", message: "Requête invalide." });
     }
+    if (error.statusCode === 413) {
+      const megabytes = Math.floor(config.config.images.maxBytes / (1024 * 1024));
+      const message = request.url.startsWith("/v1/images") ? `Image de plus de ${megabytes} Mo.` : "Corps trop volumineux.";
+      return sendError(reply, 413, { code: "payload_too_large", message });
+    }
     throw error;
+  });
+
+  // Images du Produit épinglé : publiques, les SDK les affichent sans jeton.
+  server.get<{ Params: { name: string } }>("/v1/images/:name", async (request, reply) => {
+    const image = await images.open(request.params.name);
+    if (!image) return notFound(request, reply);
+    return reply
+      .type(image.type)
+      .header("content-length", image.size)
+      .header("cache-control", "public, max-age=31536000, immutable")
+      .header("x-content-type-options", "nosniff")
+      .send(image.stream);
   });
 
   const notFound = (_request: FastifyRequest, reply: FastifyReply) =>
@@ -232,6 +260,26 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
       }
       const { live, created } = await lives.launch(request.participant, body.data.title);
       return reply.code(created ? 201 : 200).send({ live: lives.summarize(live) });
+    });
+
+    // Image du Produit épinglé, en corps binaire : le format est lu sur ses premiers octets.
+    v1.register(async (upload) => {
+      upload.removeAllContentTypeParsers();
+      upload.addContentTypeParser("*", { parseAs: "buffer" }, (_request, body, done) => done(null, body));
+      upload.post(
+        "/images",
+        // Quota vérifié avant de recevoir le corps (jusqu'à 10 Mo).
+        { onRequest: quota(quotas.imageUpload, byParticipant), bodyLimit: config.config.images.maxBytes },
+        async (request, reply) => {
+          const bytes = Buffer.isBuffer(request.body) ? request.body : Buffer.alloc(0);
+          const type = sniffImageType(bytes);
+          if (type === undefined || !config.config.images.formats.includes(type)) {
+            const formats = config.config.images.formats.join(", ");
+            return sendError(reply, 415, { code: "unsupported_media_type", message: `Formats acceptés : ${formats}.` });
+          }
+          return reply.code(201).send({ url: await images.save(bytes, type) });
+        },
+      );
     });
 
     v1.get("/config", async (request, reply) => {
