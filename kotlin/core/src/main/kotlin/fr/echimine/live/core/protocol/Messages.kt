@@ -68,6 +68,10 @@ internal sealed interface ServerMessage {
     @Serializable @SerialName("joinRequestCancelled")
     data class JoinRequestCancelled(val participantId: String) : ServerMessage
 
+    /** Vers le Spectateur dont l'Hôte a refusé la Demande de montée. */
+    @Serializable @SerialName("joinDeclined")
+    data object JoinDeclined : ServerMessage
+
     @Serializable @SerialName("roleChanged")
     data class RoleChanged(val participant: Participant, val role: Role) : ServerMessage
 

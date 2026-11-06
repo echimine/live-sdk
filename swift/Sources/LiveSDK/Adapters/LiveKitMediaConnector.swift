@@ -17,11 +17,6 @@ final class LiveKitMediaConnector: MediaConnector {
         try await room.localParticipant.setMicrophone(enabled: true)
     }
 
-    func unpublishCameraAndMicrophone() async throws {
-        try await room.localParticipant.setCamera(enabled: false)
-        try await room.localParticipant.setMicrophone(enabled: false)
-    }
-
     func disconnect() async {
         await room.disconnect()
     }

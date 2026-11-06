@@ -170,7 +170,7 @@ private fun LiveRow(live: LiveSummary, onClick: () -> Unit) {
                 overflow = TextOverflow.Ellipsis,
             )
             Text(
-                hostLine(live.host),
+                participantLine(live.host),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontSize = 13.sp,
                 maxLines = 1,

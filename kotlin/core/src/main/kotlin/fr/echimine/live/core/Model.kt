@@ -30,6 +30,9 @@ public enum class Role {
     public val isAnimator: Boolean get() = this != Viewer
 }
 
+/** Co-hôtes à l'écran au plus, aux côtés de l'Hôte (fixé par le serveur commun : `cohost_limit` au-delà). */
+public const val MAX_COHOSTS: Int = 5
+
 /** Le Produit épinglé d'un Live. [price] est en centimes, [currency] un code ISO 4217. */
 @Serializable
 public data class Product(

@@ -28,9 +28,6 @@ public enum LiveTitle {
     }
 }
 
-/// `Participant` du Live, sans ambiguïté avec celui de LiveKit dans les fichiers qui importent les deux.
-typealias LiveParticipant = Participant
-
 extension Participant {
     public var initial: String {
         name.trimmingCharacters(in: .whitespacesAndNewlines).first.map { String($0).uppercased() } ?? "?"

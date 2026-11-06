@@ -52,6 +52,14 @@ _Avoid_: Modérateur, admin, staff
 Le temps pendant lequel un Animateur déconnecté garde sa place dans le Live ; passé ce délai, un Co-hôte redevient Spectateur et le Live de l'Hôte se termine.
 _Avoid_: Timeout, expiration
 
+**Mosaïque**:
+La disposition à l'écran des personnes qui y sont, jusqu'à 6 : l'Hôte en haut à gauche, puis les Co-hôtes par ordre de montée.
+_Avoid_: Grille, split screen, layout
+
+**Gestion**:
+Le panneau des Animateurs (⚙️) où l'Hôte accepte ou refuse les Demandes de montée et retire les Co-hôtes.
+_Avoid_: Réglages, paramètres, admin
+
 ### Les interactions
 
 **Réaction**:

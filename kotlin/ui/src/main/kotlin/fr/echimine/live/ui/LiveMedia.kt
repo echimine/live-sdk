@@ -16,7 +16,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
 import fr.echimine.live.core.Live
 import fr.echimine.live.core.LiveState
-import fr.echimine.live.core.Role
 import io.livekit.android.LiveKit
 import io.livekit.android.RoomOptions
 import io.livekit.android.renderer.TextureViewRenderer
@@ -32,6 +31,8 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
@@ -55,8 +56,9 @@ internal fun rememberLiveRoom(live: Live): Room {
     val room = remember(live) { newRoom(context) }
     val state by live.state.collectAsState()
     val ended = state.connection.isFinal
-    // Seul l'Hôte publie pour l'instant ; la montée des Co-hôtes viendra avec les Demandes de montée.
-    val publishing = state.live?.role == Role.Host
+    // Les Animateurs publient. À la montée, le serveur ouvre `canPublish` sans nouveau jeton :
+    // caméra et micro s'allument dans la room déjà connectée, sans reconnexion ; ils s'éteignent à la descente.
+    val publishing = state.live?.role?.isAnimator == true
 
     LaunchedEffect(room, ended) {
         if (ended) {
@@ -81,12 +83,16 @@ internal fun rememberLiveRoom(live: Live): Room {
     }
     LaunchedEffect(room, publishing, ended) {
         if (ended) return@LaunchedEffect
-        // À chaque (re)connexion de la room : une nouvelle connexion repart sans piste publiée.
-        room::state.flow.collect { roomState ->
-            if (roomState == Room.State.CONNECTED) {
+        // À chaque (re)connexion de la room (une nouvelle connexion repart sans piste publiée), et quand
+        // LiveKit ouvre ou ferme `canPublish` : il peut arriver avant comme après `roleChanged`.
+        combine(room::state.flow, room.localParticipant::permissions.flow) { roomState, permissions ->
+            roomState == Room.State.CONNECTED && permissions?.canPublish != false
+        }.distinctUntilChanged().collect { canPublish ->
+            if (room.state == Room.State.CONNECTED) {
+                val on = publishing && canPublish
                 runCatching {
-                    room.localParticipant.setCameraEnabled(publishing)
-                    room.localParticipant.setMicrophoneEnabled(publishing)
+                    room.localParticipant.setCameraEnabled(on)
+                    room.localParticipant.setMicrophoneEnabled(on)
                 }
             }
         }

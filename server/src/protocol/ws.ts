@@ -175,6 +175,8 @@ export const ServerMessage = z.discriminatedUnion("type", [
   message("joinRequested", { participant: Participant }),
   /** Vers l'Hôte seul. */
   message("joinRequestCancelled", { participantId: ParticipantId }),
+  /** Vers le Spectateur dont l'Hôte a refusé la Demande de montée. */
+  message("joinDeclined", {}),
   message("roleChanged", { participant: Participant, role: Role }),
   /** Au plus toutes les 2 s, seulement si l'Audience a changé. */
   message("audience", AudienceCounts),

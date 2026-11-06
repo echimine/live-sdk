@@ -90,6 +90,7 @@ enum ServerMessage: Equatable {
     case liveEnded(LiveEnded)
     case joinRequested(Participant)
     case joinRequestCancelled(participantId: String)
+    case joinDeclined
     case roleChanged(RoleChanged)
     case audience(Audience)
     case reactions(ReactionsUpdate)
@@ -120,6 +121,7 @@ extension ServerMessage: Codable {
         case "liveEnded": self = .liveEnded(try LiveEnded(from: decoder))
         case "joinRequested": self = .joinRequested(try container.decode(Participant.self, forKey: .participant))
         case "joinRequestCancelled": self = .joinRequestCancelled(participantId: try container.decode(String.self, forKey: .participantId))
+        case "joinDeclined": self = .joinDeclined
         case "roleChanged": self = .roleChanged(try RoleChanged(from: decoder))
         case "audience": self = .audience(try Audience(from: decoder))
         case "reactions": self = .reactions(try ReactionsUpdate(from: decoder))
@@ -157,6 +159,7 @@ extension ServerMessage: Codable {
         case .joinRequestCancelled(let participantId):
             try container.encode("joinRequestCancelled", forKey: .type)
             try container.encode(participantId, forKey: .participantId)
+        case .joinDeclined: try container.encode("joinDeclined", forKey: .type)
         case .roleChanged(let change):
             try container.encode("roleChanged", forKey: .type)
             try change.encode(to: encoder)
