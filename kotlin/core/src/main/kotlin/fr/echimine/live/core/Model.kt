@@ -1,0 +1,115 @@
+package fr.echimine.live.core
+
+import fr.echimine.live.core.protocol.InstantSerializer
+import kotlinx.serialization.ExperimentalSerializationApi
+import kotlinx.serialization.SerialName
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonClassDiscriminator
+import java.time.Instant
+
+/**
+ * Toute personne présente dans un Live. [id] est opaque et attribué par le serveur commun ;
+ * [app] est l'App d'origine. [picture] est absent si l'avatar manque : afficher l'initiale de [name].
+ */
+@Serializable
+public data class Participant(
+    val id: String,
+    val app: String,
+    val name: String,
+    val picture: String? = null,
+)
+
+/** Rôle d'un Participant dans un Live, décidé par le serveur commun seul. */
+@Serializable
+public enum class Role {
+    @SerialName("host") Host,
+    @SerialName("cohost") Cohost,
+    @SerialName("viewer") Viewer;
+
+    /** L'Hôte ou un Co-hôte : peut épingler un Produit et modérer. */
+    public val isAnimator: Boolean get() = this != Viewer
+}
+
+/** Le Produit épinglé d'un Live. [price] est en centimes, [currency] un code ISO 4217. */
+@Serializable
+public data class Product(
+    val id: String,
+    val name: String,
+    val price: Int,
+    val currency: String,
+    val imageUrl: String? = null,
+)
+
+/** Le produit acheté, tel que l'Annonce d'achat le porte. */
+@Serializable
+public data class PurchasedProduct(
+    val id: String,
+    val name: String,
+    val price: Int,
+    val currency: String,
+)
+
+/** Un message du chat : un texte, ou une Annonce d'achat publiée par le Live lui-même. */
+@OptIn(ExperimentalSerializationApi::class)
+@Serializable
+@JsonClassDiscriminator("kind")
+public sealed interface ChatMessage {
+    public val id: String
+    public val author: Participant
+
+    /** Rôle de l'auteur au moment du message. */
+    public val role: Role
+    public val at: Instant
+
+    @Serializable
+    @SerialName("text")
+    public data class Text(
+        override val id: String,
+        override val author: Participant,
+        override val role: Role,
+        @Serializable(with = InstantSerializer::class) override val at: Instant,
+        val text: String,
+    ) : ChatMessage
+
+    /** Annonce d'achat : le prix est à formater selon la locale du téléphone. */
+    @Serializable
+    @SerialName("purchase")
+    public data class Purchase(
+        override val id: String,
+        override val author: Participant,
+        override val role: Role,
+        @Serializable(with = InstantSerializer::class) override val at: Instant,
+        val product: PurchasedProduct,
+    ) : ChatMessage
+}
+
+/** Audience : Spectateurs connectés, Animateurs exclus, détaillée par App d'origine. */
+@Serializable
+public data class Audience(
+    val total: Int,
+    val byApp: Map<String, Int>,
+)
+
+/** Un Live en cours, tel que listé. */
+@Serializable
+public data class LiveSummary(
+    val id: String,
+    val title: String? = null,
+    val host: Participant,
+    /** Audience totale (Animateurs exclus). */
+    val audience: Int,
+    @Serializable(with = InstantSerializer::class) val startedAt: Instant,
+)
+
+/** Shadowbans et Bannissements du Live, visibles des seuls Animateurs. */
+public data class Moderation(
+    val shadowbanned: List<Participant>,
+    val banned: List<Participant>,
+)
+
+/** Récapitulatif de fin, reçu par l'Hôte seul. */
+public data class LiveEndSummary(
+    val purchases: Int,
+    val reactions: Int,
+    val peakAudience: Int,
+)
