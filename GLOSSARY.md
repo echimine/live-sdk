@@ -60,6 +60,10 @@ _Avoid_: Viewers, vues, compteur de vues
 Le seul produit mis en avant dans un Live à un instant donné, avec un nom, un prix et une image ; un Animateur peut le changer pendant le Live.
 _Avoid_: Article, item, offre
 
+**Source de produits**:
+Le catalogue facultatif d'une App membre, que ses Animateurs parcourent pour préremplir le Produit épinglé ; le Live ne le connaît jamais.
+_Avoid_: Catalogue partagé, boutique, provider
+
 **Achat**:
 L'acte simulé d'un Participant qui achète le Produit épinglé d'un Live ; aucun argent ne circule.
 _Avoid_: Commande, paiement, transaction
