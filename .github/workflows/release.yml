@@ -15,8 +15,8 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-      # ConfigTests vérifie que les valeurs par défaut embarquées sont la copie de protocol/fixtures/config.json.
-      - run: swift test
+      # Les tests Swift se lancent en local (swift test) avant de poser le tag.
+      - run: swift build
       - name: Build iOS Simulator
         run: xcodebuild -scheme LiveSDK-Package -destination 'generic/platform=iOS Simulator' -quiet build
 
@@ -34,14 +34,13 @@ jobs:
           distribution: temurin
           java-version: 17
       - uses: gradle/actions/setup-gradle@v4
-      # ProtocolFixturesTest vérifie que LiveConfig.Defaults est la copie de protocol/fixtures/config.json.
-      - run: ./gradlew build --console=plain
+      # Les tests Kotlin se lancent en local (./gradlew build) avant de poser le tag.
       # La même commande que jitpack.yml, sous la version du tag : ce que JitPack construira.
       - run: ./gradlew :core:publishReleasePublicationToMavenLocal :ui:publishReleasePublicationToMavenLocal --console=plain
       - name: Vérifier les artefacts publiés
         run: |
-          test -f ~/.m2/repository/com/github/echimine/live-sdk/core/$VERSION/core-$VERSION.aar
-          test -f ~/.m2/repository/com/github/echimine/live-sdk/ui/$VERSION/ui-$VERSION.aar
+          test -f ~/.m2/repository/com/github/echimine/live-sdk/core/"$VERSION"/core-"$VERSION".aar
+          test -f ~/.m2/repository/com/github/echimine/live-sdk/ui/"$VERSION"/ui-"$VERSION".aar
 
   release:
     needs: [swift, kotlin]
@@ -65,4 +64,7 @@ jobs:
           gh release create "$TAG" --title "$TAG" --notes-file notes.md --generate-notes
       - name: Demander la construction JitPack
         # JitPack construit à la première demande ; on la déclenche pour que la première app n'attende pas.
-        run: curl -sS -o /dev/null -w "JitPack: %{http_code}\n" "https://jitpack.io/com/github/echimine/live-sdk/ui/${{ github.ref_name }}/ui-${{ github.ref_name }}.pom" || true
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          curl -sS -o /dev/null -w "JitPack %{http_code}\n" "https://jitpack.io/com/github/echimine/live-sdk/ui/$TAG/ui-$TAG.pom" || true

@@ -17,14 +17,12 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       server: ${{ steps.filter.outputs.server }}
-      swift: ${{ steps.filter.outputs.swift }}
-      kotlin: ${{ steps.filter.outputs.kotlin }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
         id: filter
         with:
-          # Un changement du contrat (protocol/) relance les trois langages.
+          # Les tests Swift et Kotlin sont lancés en local (swift test, ./gradlew build) ; seule la CI du serveur tourne ici.
           filters: |
             contract: &contract
               - 'protocol/**'
@@ -34,16 +32,6 @@ jobs:
               - 'package.json'
               - 'pnpm-lock.yaml'
               - 'pnpm-workspace.yaml'
-              - '.github/workflows/tests.yml'
-            swift:
-              - *contract
-              - 'swift/**'
-              - 'Package.swift'
-              - 'Package.resolved'
-              - '.github/workflows/tests.yml'
-            kotlin:
-              - *contract
-              - 'kotlin/**'
               - '.github/workflows/tests.yml'
 
   server:
@@ -78,29 +66,3 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm build
-
-  swift:
-    needs: changes
-    if: needs.changes.outputs.swift == 'true'
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-      - run: swift test
-      - name: Build iOS Simulator
-        run: xcodebuild -scheme LiveSDK-Package -destination 'generic/platform=iOS Simulator' -quiet build
-
-  kotlin:
-    needs: changes
-    if: needs.changes.outputs.kotlin == 'true'
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: kotlin
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: 21
-      - uses: gradle/actions/setup-gradle@v4
-      - run: ./gradlew build --console=plain
