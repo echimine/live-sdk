@@ -178,17 +178,30 @@ class LiveSocket implements Connection {
     }
 
     const message = parsed.data;
+    const { lives } = this.deps;
     switch (message.type) {
       case "join":
         return;
       case "react":
-        return this.deps.lives.react(presence, message.emoji);
+        return lives.react(presence, message.emoji);
       case "endLive":
-        return this.run(message.ref, (accepted) => this.deps.lives.endLive(presence, accepted));
+        return this.run(message.ref, (accepted) => lives.endLive(presence, accepted));
       case "sendMessage":
-        return this.run(message.ref, (accepted) => this.deps.lives.sendMessage(presence, message.text, accepted));
+        return this.run(message.ref, (accepted) => lives.sendMessage(presence, message.text, accepted));
       case "deleteMessage":
-        return this.run(message.ref, (accepted) => this.deps.lives.deleteMessage(presence, message.messageId, accepted));
+        return this.run(message.ref, (accepted) => lives.deleteMessage(presence, message.messageId, accepted));
+      case "requestToJoin":
+        return this.run(message.ref, (accepted) => lives.requestToJoin(presence, accepted));
+      case "cancelJoinRequest":
+        return this.run(message.ref, (accepted) => lives.cancelJoinRequest(presence, accepted));
+      case "acceptJoin":
+        return this.run(message.ref, (accepted) => lives.acceptJoin(presence, message.participantId, accepted));
+      case "declineJoin":
+        return this.run(message.ref, (accepted) => lives.declineJoin(presence, message.participantId, accepted));
+      case "leaveStage":
+        return this.run(message.ref, (accepted) => lives.leaveStage(presence, accepted));
+      case "removeCohost":
+        return this.run(message.ref, (accepted) => lives.removeCohost(presence, message.participantId, accepted));
       default:
         return this.reject(message.ref, "unknown_command", "Commande pas encore prise en charge.");
     }
@@ -198,7 +211,7 @@ class LiveSocket implements Connection {
    * Exécute une commande du Live : `ack` quand le Live l'accepte (avant ses
    * diffusions), sinon `error` avec son code (et `retryAfterMs` pour `rate_limited`).
    */
-  private async run(ref: string, command: (accepted: () => void) => Promise<CommandResult>) {
+  private async run(ref: string, command: (accepted: () => void) => CommandResult | Promise<CommandResult>) {
     const result = await command(() => this.send({ type: "ack", ref }));
     if (result.ok) return;
     const { ok: _ok, ...error } = result;

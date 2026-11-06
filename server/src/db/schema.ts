@@ -45,3 +45,20 @@ export const chatMessages = pgTable(
   },
   (table) => [index("chat_messages_live_seq").on(table.liveId, table.seq)],
 );
+
+/** Co-hôtes actuels des Lives ; `seq` donne l'ordre de montée. Un Co-hôte redescendu est retiré. */
+export const liveCohosts = pgTable(
+  "live_cohosts",
+  {
+    seq: bigserial("seq", { mode: "number" }).primaryKey(),
+    liveId: text("live_id")
+      .notNull()
+      .references(() => lives.id),
+    participantId: text("participant_id").notNull(),
+    participantApp: text("participant_app").notNull(),
+    participantName: text("participant_name").notNull(),
+    participantPicture: text("participant_picture"),
+    promotedAt: timestamp("promoted_at", { withTimezone: true, precision: 3 }).notNull(),
+  },
+  (table) => [uniqueIndex("live_cohosts_one_per_participant").on(table.liveId, table.participantId)],
+);

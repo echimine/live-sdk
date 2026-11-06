@@ -1,7 +1,7 @@
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { and, asc, eq, isNull, sql } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import { postgresCode } from "./db/postgres-error.js";
-import { lives } from "./db/schema.js";
+import { liveCohosts, lives } from "./db/schema.js";
 import { opaqueId } from "./ids.js";
 import type { Participant } from "./protocol/index.js";
 
@@ -78,6 +78,41 @@ export class LiveStore {
       if (postgresCode(error) === "23505") return undefined;
       throw error;
     }
+  }
+
+  /** Co-hôtes actuels d'un Live, par ordre de montée. */
+  async listCohosts(liveId: string): Promise<Participant[]> {
+    const rows = await this.db
+      .select()
+      .from(liveCohosts)
+      .where(eq(liveCohosts.liveId, liveId))
+      .orderBy(asc(liveCohosts.seq));
+    return rows.map((row) => ({
+      id: row.participantId,
+      app: row.participantApp,
+      name: row.participantName,
+      ...(row.participantPicture !== null && { picture: row.participantPicture }),
+    }));
+  }
+
+  async addCohost(liveId: string, cohost: Participant, at: Date): Promise<void> {
+    await this.db
+      .insert(liveCohosts)
+      .values({
+        liveId,
+        participantId: cohost.id,
+        participantApp: cohost.app,
+        participantName: cohost.name,
+        participantPicture: cohost.picture ?? null,
+        promotedAt: at,
+      })
+      .onConflictDoNothing();
+  }
+
+  async removeCohost(liveId: string, participantId: string): Promise<void> {
+    await this.db
+      .delete(liveCohosts)
+      .where(and(eq(liveCohosts.liveId, liveId), eq(liveCohosts.participantId, participantId)));
   }
 
   /** Termine un Live, avec son total final de Réactions. */
