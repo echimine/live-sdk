@@ -76,8 +76,18 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
   // Connexion paresseuse : le serveur démarre même si Postgres est KO, et `/health` le dit.
   const sql = postgres(env.DATABASE_URL, { max: 5, connect_timeout: 2, onnotice: () => {} });
   server.addHook("onClose", () => sql.end({ timeout: 1 }));
-  const lives = new Lives(new LiveStore(drizzle(sql)), livekit, clock);
+  const lives = new Lives(new LiveStore(drizzle(sql)), livekit, clock, server.log);
+  // Enregistré avant les sockets : leur fermeture ne relance aucun minuteur.
+  server.addHook("preClose", async () => lives.stop());
   attachLiveSockets(server, { lives, memberApps, clock });
+  // Redémarrage en plein Live : les Lives en cours reprennent. Postgres KO ne bloque pas le démarrage.
+  server.addHook("onReady", async () => {
+    try {
+      await lives.resume();
+    } catch (error) {
+      server.log.error({ err: error }, "reprise des Lives en cours impossible");
+    }
+  });
 
   server.get("/health", async (_request, reply) => {
     const health = await checkHealth(sql, env.LIVEKIT_URL);

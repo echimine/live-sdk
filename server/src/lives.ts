@@ -1,6 +1,6 @@
-import type { Clock } from "./clock.js";
+import type { Clock, Timer } from "./clock.js";
 import type { LivekitPort } from "./livekit.js";
-import { type Live, type LiveStore, newLiveId } from "./live-store.js";
+import { type EndReason, type Live, type LiveStore, newLiveId } from "./live-store.js";
 import type { ErrorCode, LiveSummary, Participant, Role, ServerMessage } from "./protocol/index.js";
 
 /** Socket d'un Participant, vu du Live : le transport reste hors de ce module. */
@@ -8,6 +8,18 @@ export interface Connection {
   send(message: ServerMessage): void;
   /** Fermeture normale (Live terminé, socket remplacé). */
   end(): void;
+}
+
+/** Délai de grâce de l'Hôte : sans retour dans ce délai, son Live se termine. */
+export const HOST_GRACE_MS = 60_000;
+/** L'Audience est diffusée au plus à cette cadence, et seulement si elle a changé. */
+export const AUDIENCE_INTERVAL_MS = 2_000;
+
+type Audience = Omit<Extract<ServerMessage, { type: "audience" }>, "type">;
+
+/** Journal des erreurs survenues hors d'une requête (minuteurs). */
+export interface Logger {
+  error(details: object, message: string): void;
 }
 
 /** Présence d'un Participant dans un Live, par son socket. */
@@ -25,6 +37,11 @@ interface RunningLive {
   present: Map<string, Presence>;
   peakAudience: number;
   ending: boolean;
+  /** Délai de grâce en cours, tant que l'Hôte n'est pas connecté. */
+  hostGrace: Timer | undefined;
+  /** Dernière Audience diffusée, et prochaine diffusion prévue. */
+  audienceSent: Audience;
+  audienceTimer: Timer | undefined;
 }
 
 export type JoinResult = { ok: true; presence: Presence } | { ok: false; code: ErrorCode; message: string };
@@ -40,11 +57,14 @@ export class Lives {
   private readonly running = new Map<string, RunningLive>();
   /** Chargements en cours, pour que des `join` simultanés partagent le même état. */
   private readonly loading = new Map<string, Promise<RunningLive | undefined>>();
+  /** Arrêt du serveur : plus aucun minuteur ne doit tourner. */
+  private stopped = false;
 
   constructor(
     private readonly store: LiveStore,
     private readonly livekit: LivekitPort,
     private readonly clock: Clock,
+    private readonly log: Logger,
   ) {}
 
   /**
@@ -64,13 +84,38 @@ export class Lives {
       await this.livekit.deleteRoom(live.id);
       throw error;
     }
-    if (inserted) return { live, created: true };
+    if (inserted) {
+      // L'Hôte doit se connecter dans le Délai de grâce, sinon le Live se termine.
+      await this.load(live.id);
+      return { live, created: true };
+    }
 
     // Lancement concurrent du même Hôte : l'autre l'a emporté, on rend son Live.
     await this.livekit.deleteRoom(live.id);
     const winner = await this.store.findRunningByHost(host.id);
     if (!winner) throw new Error(`Live en cours introuvable pour ${host.id}`);
     return { live: winner, created: false };
+  }
+
+  /**
+   * Au démarrage : recharge les Lives en cours, dont les Participants vont refaire
+   * `join`. Chacun se termine si son Hôte ne revient pas dans le Délai de grâce.
+   */
+  async resume(): Promise<void> {
+    const lives = await this.store.listRunning();
+    await Promise.all(lives.map((live) => this.load(live.id)));
+  }
+
+  /**
+   * Arrêt du serveur, avant la fermeture des sockets : les minuteurs sont annulés
+   * et n'en relancent plus. Le prochain démarrage reprend les Lives en cours.
+   */
+  stop(): void {
+    this.stopped = true;
+    for (const state of this.running.values()) {
+      state.hostGrace?.cancel();
+      state.audienceTimer?.cancel();
+    }
   }
 
   /** Lives en cours, triés par Audience décroissante (les plus récents d'abord à égalité). */
@@ -114,8 +159,13 @@ export class Lives {
     if (previous) {
       previous.connection.send({ type: "replaced" });
       previous.connection.end();
+    } else if (role === "host") {
+      state.hostGrace?.cancel();
+      state.hostGrace = undefined;
+      broadcast(state, { type: "hostReconnected" }, presence);
     }
     state.peakAudience = Math.max(state.peakAudience, audienceOf(state).total);
+    this.scheduleAudience(state);
 
     connection.send(this.snapshot(state, presence, livekitToken));
     return { ok: true, presence };
@@ -124,8 +174,12 @@ export class Lives {
   /** Le socket de ce Participant s'est fermé (sauf s'il a déjà été remplacé). */
   leave(presence: Presence): void {
     const state = this.running.get(presence.liveId);
-    if (state?.present.get(presence.participant.id) === presence) {
-      state.present.delete(presence.participant.id);
+    if (state?.present.get(presence.participant.id) !== presence) return;
+    state.present.delete(presence.participant.id);
+    this.scheduleAudience(state);
+    if (presence.role === "host") {
+      broadcast(state, { type: "hostDisconnected" });
+      this.startHostGrace(state);
     }
   }
 
@@ -139,33 +193,65 @@ export class Lives {
     }
     const state = this.running.get(presence.liveId);
     if (!state || state.ending) return liveNotFound;
+    await this.finish(state, "endedByHost", accepted);
+    return { ok: true };
+  }
 
+  /** Prévoit une diffusion de l'Audience, au plus tôt `AUDIENCE_INTERVAL_MS` après la précédente. */
+  private scheduleAudience(state: RunningLive): void {
+    if (state.audienceTimer || state.ending || this.stopped) return;
+    state.audienceTimer = this.clock.setTimeout(() => {
+      state.audienceTimer = undefined;
+      const audience = audienceOf(state);
+      if (sameAudience(audience, state.audienceSent)) return;
+      state.audienceSent = audience;
+      broadcast(state, { type: "audience", ...audience });
+    }, AUDIENCE_INTERVAL_MS);
+  }
+
+  private startHostGrace(state: RunningLive): void {
+    state.hostGrace?.cancel();
+    if (this.stopped) return;
+    state.hostGrace = this.clock.setTimeout(() => {
+      state.hostGrace = undefined;
+      if (state.ending || this.running.get(state.live.id) !== state) return;
+      this.finish(state, "hostTimeout").catch((error: unknown) => {
+        this.log.error({ err: error, liveId: state.live.id }, "fin du Live après le Délai de grâce impossible");
+      });
+    }, HOST_GRACE_MS);
+  }
+
+  /** Termine un Live : fin enregistrée, `onEnded`, puis `liveEnded` à tous, sockets fermés, room supprimée. */
+  private async finish(state: RunningLive, reason: EndReason, onEnded: () => void = () => {}): Promise<void> {
+    const liveId = state.live.id;
     // Pendant l'écriture, les `join` sont refusés et l'état reste en mémoire :
     // aucun ne peut recharger le Live encore « en cours » en base.
     state.ending = true;
+    state.hostGrace?.cancel();
+    state.hostGrace = undefined;
+    state.audienceTimer?.cancel();
+    state.audienceTimer = undefined;
     try {
-      await this.store.end(presence.liveId, "endedByHost", this.clock.now());
+      await this.store.end(liveId, reason, this.clock.now());
     } catch (error) {
+      // Le Live continue : un Hôte toujours absent garde un Délai de grâce, et l'Audience reste diffusée.
       state.ending = false;
+      if (!state.present.has(state.live.host.id)) this.startHostGrace(state);
+      this.scheduleAudience(state);
       throw error;
     }
-    this.running.delete(presence.liveId);
-    accepted();
+    this.running.delete(liveId);
+    onEnded();
 
     for (const other of state.present.values()) {
       other.connection.send(
         other.role === "host"
-          ? {
-              type: "liveEnded",
-              reason: "endedByHost",
-              summary: { purchases: 0, reactions: 0, peakAudience: state.peakAudience },
-            }
-          : { type: "liveEnded", reason: "endedByHost" },
+          ? { type: "liveEnded", reason, summary: { purchases: 0, reactions: 0, peakAudience: state.peakAudience } }
+          : { type: "liveEnded", reason },
       );
       other.connection.end();
     }
-    await this.livekit.deleteRoom(presence.liveId);
-    return { ok: true };
+    await this.livekit.deleteRoom(liveId);
   }
 
   private load(liveId: string): Promise<RunningLive | undefined> {
@@ -177,8 +263,18 @@ export class Lives {
         .findRunning(liveId)
         .then((live) => {
           if (!live) return undefined;
-          const loaded: RunningLive = { live, present: new Map(), peakAudience: 0, ending: false };
+          const loaded: RunningLive = {
+            live,
+            present: new Map(),
+            peakAudience: 0,
+            ending: false,
+            hostGrace: undefined,
+            audienceSent: { total: 0, byApp: {} },
+            audienceTimer: undefined,
+          };
           this.running.set(liveId, loaded);
+          // L'Hôte n'est pas encore là (redémarrage, reprise) : son Délai de grâce court dès maintenant.
+          this.startHostGrace(loaded);
           return loaded;
         })
         .finally(() => this.loading.delete(liveId));
@@ -213,8 +309,15 @@ function liveHeader(live: Live): { id: string; title?: string; startedAt: string
   return { id: live.id, ...(live.title !== undefined && { title: live.title }), startedAt: live.startedAt.toISOString() };
 }
 
+/** Envoie un message à tous les Participants présents, sauf `except`. */
+function broadcast(state: RunningLive, message: ServerMessage, except?: Presence): void {
+  for (const presence of state.present.values()) {
+    if (presence !== except) presence.connection.send(message);
+  }
+}
+
 /** Audience : Spectateurs connectés, Animateurs exclus, détaillée par App d'origine. */
-function audienceOf(state: RunningLive): { total: number; byApp: Record<string, number> } {
+function audienceOf(state: RunningLive): Audience {
   const byApp: Record<string, number> = {};
   let total = 0;
   for (const presence of state.present.values()) {
@@ -223,4 +326,10 @@ function audienceOf(state: RunningLive): { total: number; byApp: Record<string, 
     total++;
   }
   return { total, byApp };
+}
+
+/** Même total et même détail par App d'origine. */
+function sameAudience(a: Audience, b: Audience): boolean {
+  const apps = Object.keys(a.byApp);
+  return a.total === b.total && apps.length === Object.keys(b.byApp).length && apps.every((app) => a.byApp[app] === b.byApp[app]);
 }
