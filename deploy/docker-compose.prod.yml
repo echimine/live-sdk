@@ -57,7 +57,10 @@ services:
       # Paire de clés déclarée aussi dans LIVEKIT_KEYS du service livekit.
       LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:?}
       LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:?}
-      # ADMIN_TOKEN reste dans le .env du VPS ; branché par le ticket qui l'utilise.
+      # Ouvre GET /admin/state (Authorization: Bearer …) ; 16 caractères au moins.
+      ADMIN_TOKEN: ${ADMIN_TOKEN:?}
+      # Traefik devant : l'IP du client (quotas par IP) vient de X-Forwarded-For.
+      TRUST_PROXY: "1"
     volumes:
       - ./member-apps.json:/run/secrets/member-apps.json:ro
       - images:/data/images

@@ -6,6 +6,7 @@ import Fastify, {
   type FastifyServerOptions,
 } from "fastify";
 import postgres from "postgres";
+import { createHash, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 import { ChatStore } from "./chat-store.js";
 import { type Clock, systemClock } from "./clock.js";
@@ -15,6 +16,7 @@ import { LiveStore } from "./live-store.js";
 import { createLivekitPort, type LivekitPort } from "./livekit.js";
 import { Lives } from "./lives.js";
 import { loadMemberApps } from "./member-apps.js";
+import { Quota } from "./rate-limit.js";
 import { InvalidParticipantToken, verifyParticipantToken } from "./participant-token.js";
 import { type HttpError, LivesCreateRequest, type Participant } from "./protocol/index.js";
 import { defaultConfigFile, loadServedConfig, matchesETag } from "./served-config.js";
@@ -27,6 +29,13 @@ const ServerEnv = z.object({
   LIVEKIT_URL: z.url({ protocol: /^(wss?|https?)$/ }).optional(),
   LIVEKIT_API_KEY: z.string().min(1).optional(),
   LIVEKIT_API_SECRET: z.string().min(1).optional(),
+  /** Ouvre `GET /admin/state` ; sans lui, la route n'existe pas. */
+  ADMIN_TOKEN: z.string().min(16, "16 caractères au moins").optional(),
+  /**
+   * Nombre de proxys de confiance devant le serveur (Traefik en production : 1).
+   * L'IP du client, pour les quotas, est alors lue dans `X-Forwarded-For`.
+   */
+  TRUST_PROXY: z.string().regex(/^\d$/, "nombre de proxys, de 0 à 9").default("0").transform(Number),
 });
 export type ServerEnv = z.input<typeof ServerEnv>;
 
@@ -38,9 +47,23 @@ export interface CreateServerOptions {
   livekit?: LivekitPort;
   /** Config servie ; par défaut la fixture du contrat. */
   configFile?: string;
-  /** Journal JSON de Fastify (`true`), ou ses options (flux de sortie en test). */
+  /** Journal JSON de Fastify (`true`), ou ses options (flux de sortie en test). Jetons et texte du chat masqués. */
   logger?: FastifyServerOptions["logger"];
 }
+
+/**
+ * Champs jamais écrits dans les logs, au cas où ils y passeraient : jetons
+ * (Participant, admin, LiveKit) et texte du chat. Les en-têtes ne sont de toute
+ * façon pas journalisés par Fastify.
+ */
+const redactedLogPaths = [
+  "req.headers.authorization",
+  "headers.authorization",
+  "token",
+  "*.token",
+  "text",
+  "*.text",
+];
 
 declare module "fastify" {
   interface FastifyRequest {
@@ -50,6 +73,26 @@ declare module "fastify" {
 
 function sendError(reply: FastifyReply, status: number, error: z.infer<typeof HttpError>["error"]) {
   return reply.code(status).send({ error } satisfies z.infer<typeof HttpError>);
+}
+
+/** Quota dépassé : `429`, en-tête `Retry-After` en secondes. */
+function sendRateLimited(reply: FastifyReply, retryAfterMs: number) {
+  reply.header("retry-after", String(Math.max(1, Math.ceil(retryAfterMs / 1000))));
+  return sendError(reply, 429, { code: "rate_limited", message: "Trop de requêtes, réessayez plus tard." });
+}
+
+/** Garde de route : un jeton de `limiter` par requête, pour la clé donnée. */
+function quota(limit: Quota, keyOf: (request: FastifyRequest) => string) {
+  return async (request: FastifyRequest, reply: FastifyReply) => {
+    const retryAfterMs = limit.take(keyOf(request));
+    if (retryAfterMs !== undefined) return sendRateLimited(reply, retryAfterMs);
+  };
+}
+
+/** Comparaison à temps constant, longueurs comprises (via empreinte). */
+function sameSecret(given: string, expected: string): boolean {
+  const digest = (value: string) => createHash("sha256").update(value).digest();
+  return timingSafeEqual(digest(given), digest(expected));
 }
 
 function livekitFromEnv(env: z.infer<typeof ServerEnv>): LivekitPort {
@@ -78,7 +121,20 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
   const memberApps = loadMemberApps(env.MEMBER_APPS_FILE);
   const config = loadServedConfig(options.configFile ?? defaultConfigFile);
 
-  const server = Fastify({ logger: options.logger ?? false });
+  const logger = options.logger ?? false;
+  const server = Fastify({
+    logger: logger && {
+      ...(typeof logger === "object" && logger),
+      redact: { paths: redactedLogPaths, censor: "[masqué]" },
+    },
+    // Le socket (rang 0) et les `TRUST_PROXY - 1` derniers relais de `X-Forwarded-For` sont de confiance.
+    ...(env.TRUST_PROXY > 0 && { trustProxy: (_address: string, hop: number) => hop < env.TRUST_PROXY }),
+  });
+  const quotas = {
+    launch: new Quota(5, 60_000, clock),
+    publicGet: new Quota(60, 60_000, clock),
+  };
+  const byParticipant = (request: FastifyRequest) => request.participant.id;
 
   // Connexion paresseuse : le serveur démarre même si Postgres est KO, et `/health` le dit.
   const sql = postgres(env.DATABASE_URL, { max: 5, connect_timeout: 2, onnotice: () => {} });
@@ -94,7 +150,7 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
   });
   // Enregistré avant les sockets : leur fermeture ne relance aucun minuteur.
   server.addHook("preClose", async () => lives.stop());
-  attachLiveSockets(server, { lives, memberApps, clock });
+  attachLiveSockets(server, { lives, memberApps, clock, trustProxy: env.TRUST_PROXY });
   // Redémarrage en plein Live : les Lives en cours reprennent. Postgres KO ne bloque pas le démarrage.
   server.addHook("onReady", async () => {
     try {
@@ -104,10 +160,37 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
     }
   });
 
+  // `GET` publics (`/v1/…`) : par IP, avant toute authentification. `/health` et
+  // `/admin/state` restent joignables même quand l'IP de la salle est saturée.
+  const publicGetQuota = quota(quotas.publicGet, (request) => request.ip);
+  server.addHook("onRequest", async (request, reply) => {
+    if ((request.method === "GET" || request.method === "HEAD") && request.url.startsWith("/v1/")) {
+      return publicGetQuota(request, reply);
+    }
+  });
+
   server.get("/health", async (_request, reply) => {
     const health = await checkHealth(sql, env.LIVEKIT_URL);
     return reply.code(health.status === "ok" ? 200 : 503).send(health);
   });
+
+  const startedAt = now();
+  const adminToken = env.ADMIN_TOKEN;
+  if (adminToken !== undefined) {
+    server.get("/admin/state", async (request, reply) => {
+      const given = /^Bearer (\S+)$/.exec(request.headers.authorization ?? "")?.[1];
+      if (given === undefined || !sameSecret(given, adminToken)) {
+        return sendError(reply, 401, { code: "invalid_token", message: "Jeton d'admin refusé." });
+      }
+      const liveStates = await lives.adminState();
+      return {
+        now: now().toISOString(),
+        uptimeSeconds: Math.floor((now().getTime() - startedAt.getTime()) / 1000),
+        connections: liveStates.reduce((total, live) => total + live.connections, 0),
+        lives: liveStates,
+      };
+    });
+  }
 
   // Corps illisible (JSON invalide…) : erreur au format du contrat. Les autres statuts restent ceux de Fastify.
   server.setErrorHandler((error: { statusCode?: number }, _request, reply) => {
@@ -142,7 +225,7 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
 
     v1.get("/lives", async () => ({ lives: await lives.list() }));
 
-    v1.post("/lives", async (request, reply) => {
+    v1.post("/lives", { preHandler: quota(quotas.launch, byParticipant) }, async (request, reply) => {
       const body = LivesCreateRequest.safeParse(request.body ?? {});
       if (!body.success) {
         return sendError(reply, 400, { code: "invalid_request", message: "Titre invalide (1 à 80 caractères)." });

@@ -71,6 +71,18 @@ interface RunningLive {
   cohostGrace: Map<string, Timer>;
 }
 
+/** Un Live en cours vu par `GET /admin/state`. */
+export interface LiveAdminState {
+  id: string;
+  title?: string;
+  host: Participant;
+  startedAt: string;
+  hostConnected: boolean;
+  audience: { total: number; byApp: Record<string, number> };
+  /** Sockets ouverts dans ce Live, Animateurs compris. */
+  connections: number;
+}
+
 export type JoinResult = { ok: true; presence: Presence } | { ok: false; code: ErrorCode; message: string };
 export type CommandResult =
   | { ok: true }
@@ -191,6 +203,21 @@ export class Lives {
     return lives
       .map((live) => this.summarize(live))
       .sort((a, b) => b.audience - a.audience || b.startedAt.localeCompare(a.startedAt));
+  }
+
+  /** État de tous les Lives en cours, pour l'exploitation (`GET /admin/state`). */
+  async adminState(): Promise<LiveAdminState[]> {
+    const lives = await this.store.listRunning();
+    return lives.map((live) => {
+      const state = this.running.get(live.id);
+      return {
+        ...liveHeader(live),
+        host: live.host,
+        hostConnected: state?.present.has(live.host.id) ?? false,
+        audience: state ? audienceOf(state) : { total: 0, byApp: {} },
+        connections: state?.present.size ?? 0,
+      };
+    });
   }
 
   summarize(live: Live): LiveSummary {

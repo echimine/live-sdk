@@ -62,10 +62,12 @@ export interface LiveServer {
  * Serveur commun à l'écoute sur un port libre, avec un faux LiveKit et une horloge
  * manuelle. Le journal JSON part dans `logStream` s'il est donné.
  */
-export async function startLiveServer(options: { logStream?: Writable } = {}): Promise<LiveServer> {
+export async function startLiveServer(
+  options: { logStream?: Writable; env?: Partial<ServerEnv> } = {},
+): Promise<LiveServer> {
   const livekit = new FakeLivekit();
   const clock = new ManualClock(now);
-  const server = await startTestServer({}, clock, livekit, options.logStream);
+  const server = await startTestServer(options.env, clock, livekit, options.logStream);
   await server.listen({ port: 0, host: "127.0.0.1" });
   const { port } = server.server.address() as AddressInfo;
   const baseUrl = `http://127.0.0.1:${port}`;
