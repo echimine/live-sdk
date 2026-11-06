@@ -153,6 +153,11 @@ class ProductTest {
             val result = live.pinProduct(name, price, currency, ProductImage.Data(byteArrayOf(1)))
             assertEquals("$name/$price/$currency", LiveErrorCode.InvalidProduct, (result as LiveResult.Failure).error.code)
         }
+        // Comme le serveur commun : la longueur du nom se compte en unités UTF-16 (un emoji en vaut 2).
+        val emojiName = live.pinProduct("👟".repeat(41), 8999, "EUR")
+        assertEquals(LiveErrorCode.InvalidProduct, (emojiName as LiveResult.Failure).error.code)
+        val httpImage = live.pinProduct("Baskets", 8999, "EUR", ProductImage.Url("http://cdn.example/a.jpg"))
+        assertEquals(LiveErrorCode.InvalidProduct, (httpImage as LiveResult.Failure).error.code)
         assertEquals(emptyList<Pair<ByteArray, Int>>(), reductions)
         assertTrue(transport.socket.sent.none { it["type"]!!.jsonPrimitive.content == "pinProduct" })
 

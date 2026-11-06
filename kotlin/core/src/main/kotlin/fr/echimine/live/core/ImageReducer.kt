@@ -2,6 +2,8 @@ package fr.echimine.live.core
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Canvas
+import android.graphics.Color
 import android.graphics.Matrix
 import android.media.ExifInterface
 import java.io.ByteArrayInputStream
@@ -37,10 +39,17 @@ internal object AndroidImageReducer : ImageReducer {
         val rotation = exifRotation(bytes)
         if (rotation != 0) matrix.postRotate(rotation.toFloat())
         val scaled = if (matrix.isIdentity) decoded else Bitmap.createBitmap(decoded, 0, 0, decoded.width, decoded.height, matrix, true)
+        // JPEG n'a pas de transparence : un PNG détouré passe sur fond blanc plutôt que noir.
+        val opaque = if (scaled.hasAlpha()) {
+            Bitmap.createBitmap(scaled.width, scaled.height, Bitmap.Config.ARGB_8888).also {
+                Canvas(it).apply { drawColor(Color.WHITE); drawBitmap(scaled, 0f, 0f, null) }
+            }
+        } else {
+            scaled
+        }
         val out = ByteArrayOutputStream()
-        scaled.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, out)
-        if (scaled !== decoded) scaled.recycle()
-        decoded.recycle()
+        opaque.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, out)
+        setOf(opaque, scaled, decoded).forEach { it.recycle() }
         return ReducedImage(out.toByteArray(), "image/jpeg")
     }
 

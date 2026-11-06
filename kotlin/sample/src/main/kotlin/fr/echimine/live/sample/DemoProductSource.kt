@@ -19,7 +19,7 @@ object DemoProductSource : ProductSource {
         ProductSuggestion("sku-005", "Montre GPS", 24900, "EUR", "https://picsum.photos/seed/montre/600"),
         ProductSuggestion("sku-006", "Écouteurs sans fil", 12900, "EUR", null),
         ProductSuggestion("sku-007", "Tote bag", 1500, "EUR", "https://picsum.photos/seed/tote/600"),
-        ProductSuggestion("sku-008", "Figurine édition Tokyo", 4800, "JPY", "https://picsum.photos/seed/tokyo/600"),
+        ProductSuggestion("sku-008", "T-shirt édition limitée", 3200, "USD", "https://picsum.photos/seed/tshirt/600"),
     )
 
     override suspend fun searchProducts(query: String): List<ProductSuggestion> {

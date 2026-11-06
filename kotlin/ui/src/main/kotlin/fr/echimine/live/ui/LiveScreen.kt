@@ -45,7 +45,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import fr.echimine.live.core.ChatMessage
+import kotlinx.coroutines.flow.filterIsInstance
+import kotlinx.coroutines.flow.map
 import fr.echimine.live.core.Live
 import fr.echimine.live.core.LiveClient
 import fr.echimine.live.core.LiveEvent
@@ -107,19 +108,14 @@ public fun LiveScreen(
     var endOpen by rememberSaveable(live.id) { mutableStateOf(false) }
     var productOpen by rememberSaveable(live.id) { mutableStateOf(false) }
     var pinOpen by rememberSaveable(live.id) { mutableStateOf(false) }
-    var announcement by remember(live) { mutableStateOf<ChatMessage.Purchase?>(null) }
+    val announcements = remember(live) { live.events.filterIsInstance<LiveEvent.PurchaseAnnounced>().map { it.message } }
     val animator = details?.role?.isAnimator == true
     // L'Hôte termine son Live en le quittant ; les autres le quittent simplement.
     val hosting = hostIsYou && interactive
     val onQuit = { if (hosting) endOpen = true else onClose() }
     val floating = remember(live) { FloatingReactions() }
     LaunchedEffect(live) {
-        live.events.collect { event ->
-            when (event) {
-                is LiveEvent.ReactionsReceived -> floating.launch(event.counts)
-                is LiveEvent.PurchaseAnnounced -> announcement = event.message
-            }
-        }
+        live.events.collect { event -> if (event is LiveEvent.ReactionsReceived) floating.launch(event.counts) }
     }
 
     LiveSdkTheme {
@@ -133,7 +129,7 @@ public fun LiveScreen(
                     if (interactive && !hostIsYou && state.connection == Connection.Connected) {
                         HostPresenceBanner(details.hostConnected, Modifier.align(Alignment.TopCenter).padding(top = 8.dp))
                     }
-                    PurchaseToast(announcement, Modifier.align(Alignment.TopCenter).padding(top = 52.dp, start = 16.dp, end = 16.dp))
+                    PurchaseToast(announcements, Modifier.align(Alignment.TopCenter).padding(top = 52.dp, start = 16.dp, end = 16.dp))
                     StatusOverlay(state, hasVideo = camera != null, onClose = onClose)
                     FloatingReactionsLayer(
                         floating,

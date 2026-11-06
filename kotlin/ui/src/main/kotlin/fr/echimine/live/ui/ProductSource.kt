@@ -66,8 +66,11 @@ internal class ProductSearch(
         launchSearch(debounce = true)
     }
 
-    /** « Réessayer » : relance aussitôt la dernière recherche. */
-    fun retry() = launchSearch(debounce = false)
+    /** « Réessayer » : relance aussitôt la dernière recherche, ou [query] si elle est donnée. */
+    fun retry(query: String = this.query) {
+        this.query = query.trim()
+        launchSearch(debounce = false)
+    }
 
     private fun launchSearch(debounce: Boolean) {
         job?.cancel()
@@ -94,8 +97,7 @@ internal class ProductSearch(
         val max = nameMaxLength()
         return suggestions.asSequence()
             .map { it.copy(name = it.name.trim()) }
-            .filter { productProblem(it.name, it.priceCents, it.currency, max) == null }
-            .filter { it.imageUrl == null || it.imageUrl.startsWith("https://") }
+            .filter { productProblem(it.name, it.priceCents, it.currency, it.imageUrl, max) == null }
             .take(MAX_RESULTS)
             .toList()
     }

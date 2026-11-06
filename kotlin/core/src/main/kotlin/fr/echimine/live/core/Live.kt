@@ -249,7 +249,7 @@ public class Live internal constructor(
     /**
      * Animateur : épingle un produit, ou remplace le Produit épinglé. [price] en centimes,
      * [currency] code ISO 4217. Un produit invalide (nom vide ou au-delà de `config.productNameMaxLength`
-     * après `trim`, prix hors de 0 à [MAX_PRODUCT_PRICE], devise mal formée) est refusé sans rien envoyer
+     * après `trim`, prix hors de 0 à [MAX_PRODUCT_PRICE], devise mal formée, image non https) est refusé sans rien envoyer
      * ([LiveErrorCode.InvalidProduct]). Une [ProductImage.Data] est d'abord réduite puis envoyée au serveur commun.
      */
     public suspend fun pinProduct(
@@ -260,7 +260,7 @@ public class Live internal constructor(
     ): LiveResult<Unit> {
         val trimmed = name.trim()
         @OptIn(InternalLiveSdkApi::class)
-        productProblem(trimmed, price, currency, config.value.productNameMaxLength)?.let {
+        productProblem(trimmed, price, currency, (image as? ProductImage.Url)?.url, config.value.productNameMaxLength)?.let {
             return LiveResult.Failure(LiveError(LiveErrorCode.InvalidProduct, it))
         }
         val imageUrl = when (image) {

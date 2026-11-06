@@ -72,7 +72,10 @@ import fr.echimine.live.core.Product
 import fr.echimine.live.core.ProductImage
 import fr.echimine.live.core.productProblem
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.buffer
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -84,32 +87,30 @@ import java.util.Locale
 
 // ------------------------------------------------------------------ prix
 
-/** Prix en centimes (unités mineures de [currency]), formaté selon la locale du téléphone. */
+/**
+ * Prix en centimes (1/100 de [currency], quelle que soit la devise, comme le contrat), formaté selon
+ * la locale du téléphone.
+ */
 internal fun formatPrice(cents: Int, currency: String): String {
     val format = NumberFormat.getCurrencyInstance(Locale.getDefault())
-    val known = runCatching { Currency.getInstance(currency) }.getOrNull()
-    known?.let { format.currency = it }
-    return format.format(BigDecimal(cents).movePointLeft(fractionDigits(currency)))
+    runCatching { Currency.getInstance(currency) }.getOrNull()?.let { format.currency = it }
+    return format.format(BigDecimal(cents).movePointLeft(2))
 }
 
-/** Prix saisi (« 89,99 », « 89.99 ») en centimes de [currency] ; `null` s'il est illisible. */
-internal fun parsePrice(text: String, currency: String): Int? {
+/** Prix saisi (« 89,99 », « 89.99 ») en centimes ; `null` s'il est illisible. */
+internal fun parsePrice(text: String): Int? {
     val normalized = text.trim().replace(" ", "").replace(" ", "").replace(" ", "").replace(',', '.')
     if (normalized.isEmpty() || normalized.count { it == '.' } > 1) return null
     val amount = normalized.toBigDecimalOrNull() ?: return null
-    if (amount.scale() > fractionDigits(currency)) return null
-    return runCatching { amount.movePointRight(fractionDigits(currency)).intValueExact() }.getOrNull()
+    if (amount.scale() > 2) return null
+    return runCatching { amount.movePointRight(2).intValueExact() }.getOrNull()
 }
 
 /** Centimes en saisie modifiable (« 89,99 »), avec le séparateur décimal de la locale. */
-internal fun editablePrice(cents: Int, currency: String): String {
+internal fun editablePrice(cents: Int): String {
     val separator = DecimalFormatSymbols.getInstance().decimalSeparator
-    return BigDecimal(cents).movePointLeft(fractionDigits(currency)).toPlainString().replace('.', separator)
+    return BigDecimal(cents).movePointLeft(2).toPlainString().replace('.', separator)
 }
-
-/** 2 pour EUR, 0 pour JPY ; 2 pour une devise inconnue. */
-private fun fractionDigits(currency: String): Int =
-    runCatching { Currency.getInstance(currency).defaultFractionDigits }.getOrNull()?.takeIf { it >= 0 } ?: 2
 
 /** Devise de la locale du téléphone, pour préremplir la saisie manuelle. */
 private fun localCurrency(): String = runCatching { Currency.getInstance(Locale.getDefault()).currencyCode }.getOrNull() ?: "EUR"
@@ -177,18 +178,23 @@ internal fun ProductSheet(live: Live, onDismiss: () -> Unit) {
     var seenId by remember { mutableStateOf(product?.id) }
     var buying by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
-    val changed = product != null && product.id != seenId
+    // `product_changed` reçu : expliqué même si le nouveau `productPinned` n'est pas encore arrivé.
+    var refused by remember { mutableStateOf(false) }
+    val changed = refused || (product != null && product.id != seenId)
 
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 24.dp)) {
             if (product == null) {
                 Text("Produit", style = MaterialTheme.typography.titleMedium)
                 Spacer(Modifier.height(8.dp))
-                Text("Ce produit n'est plus proposé.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(
+                    if (refused) "Le produit a été retiré avant votre achat : rien n'a été acheté." else "Ce produit n'est plus proposé.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
                 return@Column
             }
             if (changed) {
-                Notice("Le produit vient de changer : vérifiez-le avant de confirmer.")
+                Notice("Le produit vient de changer : rien n'a été acheté. Vérifiez-le avant de confirmer.")
                 Spacer(Modifier.height(12.dp))
             }
             ProductThumbnail(product.imageUrl, Modifier.fillMaxWidth().aspectRatio(1.6f))
@@ -214,13 +220,16 @@ internal fun ProductSheet(live: Live, onDismiss: () -> Unit) {
                 onClick = {
                     buying = true
                     error = null
+                    refused = false
                     seenId = product.id
                     scope.launch {
                         when (val result = live.purchase(product.id)) {
                             is LiveResult.Success -> onDismiss()
-                            // `product_changed` : la fiche montre le nouveau produit dès son `productPinned`,
-                            // avec l'avertissement, et attend une nouvelle confirmation.
-                            is LiveResult.Failure -> if (result.error.code != LiveErrorCode.ProductChanged) {
+                            // `product_changed` : avertissement, puis le nouveau produit dès son `productPinned`,
+                            // qui attend une nouvelle confirmation.
+                            is LiveResult.Failure -> if (result.error.code == LiveErrorCode.ProductChanged) {
+                                refused = true
+                            } else {
                                 error = result.error.message
                             }
                         }
@@ -256,15 +265,20 @@ private fun InlineProgress() {
 
 // ------------------------------------------------------------------ toast d'Annonce d'achat
 
-/** Toast des Annonces d'achat, l'une après l'autre, quelques secondes chacune. */
+/**
+ * Toast des Annonces d'achat de [announcements], l'une après l'autre, quelques secondes chacune ;
+ * en rafale, seules les plus récentes attendent leur tour.
+ */
 @Composable
-internal fun PurchaseToast(announcement: ChatMessage.Purchase?, modifier: Modifier = Modifier) {
+internal fun PurchaseToast(announcements: Flow<ChatMessage.Purchase>, modifier: Modifier = Modifier) {
     var shown by remember { mutableStateOf<ChatMessage.Purchase?>(null) }
-    LaunchedEffect(announcement) {
-        if (announcement == null) return@LaunchedEffect
-        shown = announcement
-        delay(TOAST_DURATION_MS)
-        shown = null
+    LaunchedEffect(announcements) {
+        announcements.buffer(TOAST_QUEUE, BufferOverflow.DROP_OLDEST).collect { announcement ->
+            shown = announcement
+            delay(TOAST_DURATION_MS)
+            shown = null
+            delay(TOAST_GAP_MS) // laisse le toast sortir avant le suivant
+        }
     }
     AnimatedVisibility(
         visible = shown != null,
@@ -298,6 +312,8 @@ internal fun purchaseLine(message: ChatMessage.Purchase): String =
     "${message.author.name} a acheté ${message.product.name} · ${formatPrice(message.product.price, message.product.currency)}"
 
 private const val TOAST_DURATION_MS = 3_000L
+private const val TOAST_GAP_MS = 300L
+private const val TOAST_QUEUE = 3
 
 // ------------------------------------------------------------------ épingler
 
@@ -340,11 +356,11 @@ internal fun PinProductSheet(
         }
     }
 
-    val cents = parsePrice(price, currency)
+    val cents = parsePrice(price)
     val problem = when {
         name.isBlank() && price.isBlank() -> null
         cents == null -> "Prix illisible."
-        else -> productProblem(name.trim(), cents, currency.trim(), config.productNameMaxLength)
+        else -> productProblem(name.trim(), cents, currency.trim(), imageUrl.takeIf { photo == null }, config.productNameMaxLength)
     }
     val canPin = !busy && name.isNotBlank() && cents != null && problem == null
 
@@ -392,6 +408,7 @@ internal fun PinProductSheet(
                     TextButton(
                         onClick = {
                             busy = true
+                            error = null
                             scope.launch {
                                 when (val result = live.unpinProduct()) {
                                     is LiveResult.Success -> onDismiss()
@@ -409,7 +426,7 @@ internal fun PinProductSheet(
                 CatalogSearch(productSource, config) { suggestion ->
                     name = suggestion.name
                     currency = suggestion.currency
-                    price = editablePrice(suggestion.priceCents, suggestion.currency)
+                    price = editablePrice(suggestion.priceCents)
                     imageUrl = suggestion.imageUrl
                     photo = null
                     error = null
@@ -479,6 +496,8 @@ private fun CatalogSearch(source: ProductSource, config: LiveConfig, onPick: (Pr
     val search = remember(source) { ProductSearch(source, scope) { latestConfig.productNameMaxLength } }
     val state by search.state.collectAsStateWithLifecycle()
     var query by rememberSaveable { mutableStateOf("") }
+    // Après une rotation, la recherche est recréée : relancer la requête restée dans le champ.
+    LaunchedEffect(search) { if (query.isNotBlank()) search.retry(query) }
 
     OutlinedTextField(
         value = query,
@@ -503,7 +522,7 @@ private fun CatalogSearch(source: ProductSource, config: LiveConfig, onPick: (Pr
                 Text("Catalogue indisponible", fontWeight = FontWeight.SemiBold)
                 Text("Vous pouvez saisir le produit à la main.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
             }
-            TextButton(onClick = search::retry) { Text("Réessayer") }
+            TextButton(onClick = { search.retry() }) { Text("Réessayer") }
         }
         is ProductSearchState.Results -> if (current.suggestions.isEmpty()) {
             Text("Aucun produit trouvé.", color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -532,7 +551,9 @@ private fun CatalogSearch(source: ProductSource, config: LiveConfig, onPick: (Pr
 /** Fichier temporaire où l'appareil photo enregistre sa prise. */
 private fun captureUri(context: Context): Uri {
     val dir = File(context.cacheDir, "live-sdk").apply { mkdirs() }
-    val file = File(dir, "produit.jpg")
+    // Un fichier par prise : une URI réutilisée afficherait l'ancienne photo, mise en cache.
+    dir.listFiles()?.forEach { it.delete() }
+    val file = File(dir, "produit-${System.currentTimeMillis()}.jpg")
     return FileProvider.getUriForFile(context, "${context.packageName}.livesdk.fileprovider", file)
 }
 
