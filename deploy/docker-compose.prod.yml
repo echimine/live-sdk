@@ -52,8 +52,12 @@ services:
       HOST: 0.0.0.0
       DATABASE_URL: ${DATABASE_URL:?}
       MEMBER_APPS_FILE: /run/secrets/member-apps.json
+      # Adresse publique de LiveKit : API serveur (https) et signal des SDK (wss).
       LIVEKIT_URL: ${LIVEKIT_URL:-https://livekit.echimine.fr}
-      # ADMIN_TOKEN, LIVEKIT_API_KEY et LIVEKIT_API_SECRET restent dans le .env du VPS ; branchés par les tickets qui les utilisent.
+      # Paire de clés déclarée aussi dans LIVEKIT_KEYS du service livekit.
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:?}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:?}
+      # ADMIN_TOKEN reste dans le .env du VPS ; branché par le ticket qui l'utilise.
     volumes:
       - ./member-apps.json:/run/secrets/member-apps.json:ro
       - images:/data/images

@@ -15,14 +15,19 @@ export function graphemeCount(text: string): number {
   return count;
 }
 
+/** Texte de 1 à `max` caractères visibles, après `trim`. */
+function visibleText(max: number) {
+  return z
+    .string()
+    .trim()
+    .refine((text) => {
+      const count = graphemeCount(text);
+      return count >= 1 && count <= max;
+    }, `1 à ${max} caractères visibles`);
+}
+
 /** Pseudo d'un Participant : 1 à 30 caractères visibles, après `trim`. */
-export const ParticipantName = z
-  .string()
-  .trim()
-  .refine((name) => {
-    const count = graphemeCount(name);
-    return count >= 1 && count <= 30;
-  }, "1 à 30 caractères visibles");
+export const ParticipantName = visibleText(30);
 
 /**
  * Participant tel qu'il apparaît sur le fil. `id` est opaque et attribué par le
@@ -41,8 +46,8 @@ export type Participant = z.infer<typeof Participant>;
 export const Role = z.enum(["host", "cohost", "viewer"]);
 export type Role = z.infer<typeof Role>;
 
-/** Titre facultatif d'un Live. */
-export const LiveTitle = z.string().min(1).max(80);
+/** Titre facultatif d'un Live : 1 à 80 caractères visibles, après `trim`. */
+export const LiveTitle = visibleText(80);
 
 /** Nom d'un Produit épinglé (`config.product.nameMaxLength`). */
 export const ProductName = z.string().min(1).max(80);

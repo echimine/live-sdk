@@ -2,8 +2,14 @@ import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import type { AddressInfo } from "node:net";
+import type { FastifyInstance } from "fastify";
 import { SignJWT } from "jose";
+import postgres from "postgres";
+import { type Clock, systemClock } from "../src/clock.js";
+import type { LivekitPort } from "../src/livekit.js";
 import { createServer, type ServerEnv } from "../src/server.js";
+import { FakeLivekit, ManualClock, TestSocket } from "./fakes.js";
 
 /** App membres de test : celles du fichier d'exemple commité. */
 export const memberAppsFile = fileURLToPath(new URL("../member-apps.example.json", import.meta.url));
@@ -27,9 +33,54 @@ export function testEnv(overrides: Partial<ServerEnv> = {}): ServerEnv {
   return { DATABASE_URL: databaseUrl, MEMBER_APPS_FILE: memberAppsFile, ...overrides };
 }
 
-/** Serveur commun branché sur les App membres de test et une horloge figée sur `now`. */
-export function startTestServer(env: Partial<ServerEnv> = {}, clock: () => Date = () => now) {
-  return createServer({ env: testEnv(env), now: clock });
+/**
+ * Serveur commun branché sur les App membres de test, un faux LiveKit et une
+ * horloge figée sur `now` (ou l'horloge donnée).
+ */
+export function startTestServer(
+  env: Partial<ServerEnv> = {},
+  clock: Clock | (() => Date) = () => now,
+  livekit: LivekitPort = new FakeLivekit(),
+) {
+  const injected = typeof clock === "function" ? { ...systemClock, now: clock } : clock;
+  return createServer({ env: testEnv(env), clock: injected, livekit });
+}
+
+export interface LiveServer {
+  server: FastifyInstance;
+  livekit: FakeLivekit;
+  clock: ManualClock;
+  /** Base HTTP, par exemple `http://127.0.0.1:51234`. */
+  baseUrl: string;
+  /** Ouvre `/v1/lives/{id}/ws`. */
+  openSocket(liveId: string, options?: { autoPong?: boolean }): Promise<TestSocket>;
+}
+
+/** Serveur commun à l'écoute sur un port libre, avec un faux LiveKit et une horloge manuelle. */
+export async function startLiveServer(): Promise<LiveServer> {
+  const livekit = new FakeLivekit();
+  const clock = new ManualClock(now);
+  const server = await startTestServer({}, clock, livekit);
+  await server.listen({ port: 0, host: "127.0.0.1" });
+  const { port } = server.server.address() as AddressInfo;
+  const baseUrl = `http://127.0.0.1:${port}`;
+  return {
+    server,
+    livekit,
+    clock,
+    baseUrl,
+    openSocket: (liveId, options) => TestSocket.open(`ws://127.0.0.1:${port}/v1/lives/${liveId}/ws`, options),
+  };
+}
+
+/** Vide les tables entre deux tests (les fichiers de test tournent l'un après l'autre). */
+export async function resetDatabase(): Promise<void> {
+  const sql = postgres(databaseUrl, { max: 1, onnotice: () => {} });
+  try {
+    await sql`truncate table lives`;
+  } finally {
+    await sql.end({ timeout: 1 });
+  }
 }
 
 interface TokenClaims {

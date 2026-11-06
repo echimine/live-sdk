@@ -1,3 +1,4 @@
+import { migrateDatabase } from "./db/migrate.js";
 import { createServer } from "./server.js";
 
 function readPort(value: string | undefined): number {
@@ -14,6 +15,9 @@ const host = process.env.HOST || "0.0.0.0";
 
 // Config invalide → le serveur refuse de démarrer (l'erreur sort en code 1).
 const server = await createServer({ env: process.env, logger: true });
+
+// Migrations avant d'écouter : Postgres doit répondre (compose : `depends_on` sain).
+await migrateDatabase(process.env.DATABASE_URL!);
 
 try {
   await server.listen({ port, host });

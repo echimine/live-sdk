@@ -9,7 +9,7 @@ import { Currency, HttpsUrl, LiveTitle, Participant, Price, ProductName, Role, T
  */
 
 const ParticipantId = z.string().min(1);
-const Ref = z.string().min(1).max(64);
+export const Ref = z.string().min(1).max(64);
 
 function command<T extends string, S extends z.ZodRawShape>(type: T, shape: S) {
   return z.object({ type: z.literal(type), ref: Ref, ...shape });
