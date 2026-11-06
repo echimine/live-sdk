@@ -3,6 +3,7 @@ import type { ChatStore } from "./chat-store.js";
 import type { Clock, Timer } from "./clock.js";
 import type { LivekitPort } from "./livekit.js";
 import { SlidingWindow } from "./rate-limit.js";
+import { LiveReactions } from "./reactions.js";
 import { type EndReason, type Live, type LiveStore, newLiveId } from "./live-store.js";
 import type { ChatMessage, Config, ErrorCode, LiveSummary, Participant, Role, ServerMessage } from "./protocol/index.js";
 
@@ -57,6 +58,8 @@ interface RunningLive {
   recentMessages: ChatMessage[];
   /** Messages récents de chaque Participant, pour la limite du chat. */
   chatWindow: SlidingWindow;
+  /** Réactions : agrégation, diffusion et total conservé. */
+  reactions: LiveReactions;
 }
 
 export type JoinResult = { ok: true; presence: Presence } | { ok: false; code: ErrorCode; message: string };
@@ -112,7 +115,13 @@ export class Lives {
     const existing = await this.store.findRunningByHost(host.id);
     if (existing) return { live: existing, created: false };
 
-    const live: Live = { id: newLiveId(), ...(title !== undefined && { title }), host, startedAt: this.clock.now() };
+    const live: Live = {
+      id: newLiveId(),
+      ...(title !== undefined && { title }),
+      host,
+      startedAt: this.clock.now(),
+      reactionsTotal: 0,
+    };
     await this.livekit.createRoom(live.id);
     let inserted: Live | undefined;
     try {
@@ -145,13 +154,22 @@ export class Lives {
 
   /**
    * Arrêt du serveur, avant la fermeture des sockets : les minuteurs sont annulés
-   * et n'en relancent plus. Le prochain démarrage reprend les Lives en cours.
+   * et n'en relancent plus, le total des Réactions est écrit. Le prochain démarrage
+   * reprend les Lives en cours.
    */
-  stop(): void {
+  async stop(): Promise<void> {
     this.stopped = true;
+    const saves: Promise<void>[] = [];
     for (const state of this.running.values()) {
       state.hostGrace?.cancel();
       state.audienceTimer?.cancel();
+      state.reactions.halt();
+      // Le total des Réactions pas encore écrit l'est maintenant, pour que le redémarrage le retrouve.
+      if (!state.ending) saves.push(state.reactions.save());
+    }
+    const failures = (await Promise.allSettled(saves)).filter((result) => result.status === "rejected");
+    for (const failure of failures) {
+      this.log.error({ err: failure.reason }, "enregistrement du total des Réactions impossible à l'arrêt");
     }
   }
 
@@ -286,15 +304,16 @@ export class Lives {
     if (!(await this.chat.markDeleted(state.live.id, messageId, this.clock.now()))) {
       return { ok: false, code: "not_found", message: "Message introuvable." };
     }
-    // Le Live a pu se terminer pendant l'écriture : la suppression est conservée, sans diffusion.
-    if (state.ending || this.running.get(state.live.id) !== state) return liveNotFound;
     state.recentMessages = state.recentMessages.filter((message) => message.id !== messageId);
-    accepted();
-    broadcast(state, { type: "messageDeleted", messageId });
-    // La suppression est faite et annoncée : un échec du complément ne la remet pas en cause.
+    // Complété avant l'annonce : qui rejoint après `messageDeleted` reçoit bien 50 messages.
+    // La suppression est faite : un échec du complément ne la remet pas en cause.
     await this.refillRecentMessages(state).catch((error: unknown) => {
       this.log.error({ err: error, liveId: state.live.id }, "relecture des derniers messages impossible");
     });
+    // Le Live a pu se terminer pendant les écritures : la suppression est conservée, sans diffusion.
+    if (state.ending || this.running.get(state.live.id) !== state) return liveNotFound;
+    accepted();
+    broadcast(state, { type: "messageDeleted", messageId });
     return { ok: true };
   }
 
@@ -312,6 +331,12 @@ export class Lives {
     // Le plus ancien gardé n'est plus en base (supprimé pendant la lecture) : on laisse la mémoire telle quelle.
     if (olderCount <= 0) return;
     state.recentMessages = [...stored.slice(0, olderCount), ...current].slice(-SNAPSHOT_MESSAGES);
+  }
+
+  /** Un Participant envoie une Réaction : sans `ack`, diffusée à tous avec les autres (voir `LiveReactions`). */
+  react(presence: Presence, emoji: string): void {
+    const state = this.running.get(presence.liveId);
+    if (state && !state.ending) state.reactions.add(presence.participant.id, emoji);
   }
 
   /** Prévoit une diffusion de l'Audience, au plus tôt `AUDIENCE_INTERVAL_MS` après la précédente. */
@@ -348,13 +373,15 @@ export class Lives {
     state.hostGrace = undefined;
     state.audienceTimer?.cancel();
     state.audienceTimer = undefined;
+    state.reactions.halt();
     try {
-      await this.store.end(liveId, reason, this.clock.now());
+      await this.store.end(liveId, reason, this.clock.now(), state.reactions.total);
     } catch (error) {
       // Le Live continue : un Hôte toujours absent garde un Délai de grâce, et l'Audience reste diffusée.
       state.ending = false;
       if (!state.present.has(state.live.host.id)) this.startHostGrace(state);
       this.scheduleAudience(state);
+      state.reactions.resume();
       throw error;
     }
     this.running.delete(liveId);
@@ -363,12 +390,31 @@ export class Lives {
     for (const other of state.present.values()) {
       other.connection.send(
         other.role === "host"
-          ? { type: "liveEnded", reason, summary: { purchases: 0, reactions: 0, peakAudience: state.peakAudience } }
+          ? {
+              type: "liveEnded",
+              reason,
+              summary: { purchases: 0, reactions: state.reactions.total, peakAudience: state.peakAudience },
+            }
           : { type: "liveEnded", reason },
       );
       other.connection.end();
     }
     await this.livekit.deleteRoom(liveId);
+  }
+
+  private liveReactions(live: Live): LiveReactions {
+    return new LiveReactions(live.reactionsTotal, {
+      clock: this.clock,
+      allowed: this.config.reactions,
+      broadcast: (counts, total) => {
+        const state = this.running.get(live.id);
+        if (state) broadcast(state, { type: "reactions", counts, total });
+      },
+      save: (total) => this.store.saveReactionsTotal(live.id, total),
+      onSaveError: (error) => {
+        this.log.error({ err: error, liveId: live.id }, "enregistrement du total des Réactions impossible");
+      },
+    });
   }
 
   private load(liveId: string): Promise<RunningLive | undefined> {
@@ -389,6 +435,7 @@ export class Lives {
             audienceTimer: undefined,
             recentMessages,
             chatWindow: new SlidingWindow(CHAT_WINDOW_MS),
+            reactions: this.liveReactions(live),
           };
           this.running.set(liveId, loaded);
           // L'Hôte n'est pas encore là (redémarrage, reprise) : son Délai de grâce court dès maintenant.
@@ -413,7 +460,7 @@ export class Lives {
       hostConnected: state.present.has(live.host.id),
       cohosts: [],
       audience: audienceOf(state),
-      reactionsTotal: 0,
+      reactionsTotal: state.reactions.total,
       messages: state.recentMessages,
       livekit: { url: this.livekit.url, token: livekitToken },
       // Demandes de montée pour l'Hôte seul, modération pour les Animateurs seuls.

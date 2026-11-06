@@ -1,4 +1,4 @@
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import { postgresCode } from "./db/postgres-error.js";
 import { lives } from "./db/schema.js";
@@ -10,6 +10,8 @@ export interface Live {
   title?: string;
   host: Participant;
   startedAt: Date;
+  /** Total des Réactions au dernier enregistrement. */
+  reactionsTotal: number;
 }
 
 export type EndReason = "endedByHost" | "hostTimeout";
@@ -27,6 +29,7 @@ function toLive(row: Row): Live {
       ...(row.hostPicture !== null && { picture: row.hostPicture }),
     },
     startedAt: row.startedAt,
+    reactionsTotal: row.reactionsTotal,
   };
 }
 
@@ -77,10 +80,24 @@ export class LiveStore {
     }
   }
 
-  async end(id: string, reason: EndReason, at: Date): Promise<void> {
+  /** Termine un Live, avec son total final de Réactions. */
+  async end(id: string, reason: EndReason, at: Date, reactionsTotal: number): Promise<void> {
     await this.db
       .update(lives)
-      .set({ endedAt: at, endReason: reason })
+      .set({ endedAt: at, endReason: reason, reactionsTotal: greatestReactionsTotal(reactionsTotal) })
       .where(and(eq(lives.id, id), isNull(lives.endedAt)));
   }
+
+  /** Enregistre le total des Réactions d'un Live ; un total plus ancien n'écrase jamais un plus récent. */
+  async saveReactionsTotal(id: string, reactionsTotal: number): Promise<void> {
+    await this.db
+      .update(lives)
+      .set({ reactionsTotal: greatestReactionsTotal(reactionsTotal) })
+      .where(eq(lives.id, id));
+  }
+}
+
+/** Le total ne fait que croître : des écritures qui se croisent gardent le plus grand. */
+function greatestReactionsTotal(total: number) {
+  return sql`greatest(${lives.reactionsTotal}, ${total})`;
 }

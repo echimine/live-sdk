@@ -12,6 +12,8 @@ export type Claims = Parameters<typeof participantToken>[0];
 export function useLiveServer(options: Parameters<typeof startLiveServer>[0] = {}) {
   let live: LiveServer;
   const sockets: TestSocket[] = [];
+  /** Serveurs « plantés » : laissés de côté sans arrêt propre, fermés après le test. */
+  const crashed: LiveServer[] = [];
 
   beforeEach(async () => {
     await resetDatabase();
@@ -21,6 +23,7 @@ export function useLiveServer(options: Parameters<typeof startLiveServer>[0] = {
   afterEach(async () => {
     for (const socket of sockets.splice(0)) socket.close();
     await live.server.close();
+    for (const server of crashed.splice(0)) await server.server.close();
   });
 
   const harness = {
@@ -50,6 +53,16 @@ export function useLiveServer(options: Parameters<typeof startLiveServer>[0] = {
     /** Coupe le serveur (sockets compris) et en démarre un neuf sur la même base, horloge remise à `now`. */
     async restart() {
       await live.server.close();
+      live = await startLiveServer(options);
+    },
+
+    /**
+     * Redémarrage brutal : un serveur neuf prend le relais sur la même base sans que
+     * l'ancien ait pu s'arrêter proprement (rien n'est écrit à l'arrêt). L'ancien,
+     * dont l'horloge n'avance plus, n'est fermé qu'après le test.
+     */
+    async crash() {
+      crashed.push(live);
       live = await startLiveServer(options);
     },
 
