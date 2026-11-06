@@ -82,12 +82,15 @@ private struct LiveStage: View {
     @State private var reactionsOpen = false
     @State private var audienceOpen = false
     @State private var recapOpen = false
-    @State private var stageOpen = false
+    @State private var managementOpen = false
     @State private var confirmingEnd = false
     @State private var confirmingLeaveStage = false
     @State private var ending = false
     @State private var commandError: String?
     @State private var stageError: String?
+    @State private var selectedForModeration: ChatMessage?
+    /// « Terminer le Live » touché dans ⚙️ Gestion : confirmé une fois la feuille fermée.
+    @State private var confirmEndAfterSheet = false
 
     private var interactive: Bool { session.status == .connected }
     private var recap: LiveRecap? {
@@ -121,9 +124,9 @@ private struct LiveStage: View {
                 }
                 Spacer()
                 if interactive {
-                    RecentMessages(messages: session.messages)
+                    RecentMessages(session: session) { selectedForModeration = $0 }
                     dock
-                } else if case .ended = session.status, recap == nil {
+                } else if showsCloseButton {
                     Button("Fermer", action: onClose)
                         .buttonStyle(.borderedProminent)
                 }
@@ -131,17 +134,26 @@ private struct LiveStage: View {
             .padding(16)
         }
         .sheet(isPresented: Binding(
-            get: { chatOpen || reactionsOpen || audienceOpen || recapOpen || productOpen || stageOpen },
+            get: { chatOpen || reactionsOpen || audienceOpen || recapOpen || productOpen || managementOpen },
             set: { if !$0 { closeSheets() } }
         ), onDismiss: {
             if recap != nil { onClose() }
+            if confirmEndAfterSheet {
+                confirmEndAfterSheet = false
+                confirmingEnd = interactive && session.role == .host
+            }
         }) {
             Group {
                 if let recap {
                     NavigationStack { LiveRecapSheet(recap: recap, onClose: closeSheets) }
                         .interactiveDismissDisabled()
-                } else if stageOpen {
-                    NavigationStack { StageManagementSheet(session: session, onClose: closeSheets) }
+                } else if managementOpen {
+                    NavigationStack {
+                        ManagementSheet(session: session, productSource: productSource, onEndLive: {
+                            confirmEndAfterSheet = true
+                            closeSheets()
+                        }, onClose: closeSheets)
+                    }
                 } else if productOpen {
                     NavigationStack { ProductSheet(session: session, source: productSource) }
                 } else if audienceOpen {
@@ -180,7 +192,7 @@ private struct LiveStage: View {
             Text(stageError ?? "Réessayez.")
         }
         .onChange(of: session.role) { _, role in
-            if role != .host { stageOpen = false }
+            if role != .host && role != .cohost { managementOpen = false }
             if role != .cohost { confirmingLeaveStage = false }
         }
         .onChange(of: session.status, initial: true) { _, _ in
@@ -189,7 +201,7 @@ private struct LiveStage: View {
                 confirmingLeaveStage = false
                 commandError = nil
                 stageError = nil
-                stageOpen = false
+                managementOpen = false
                 // Garder la même présentation lors du passage au récapitulatif.
                 recapOpen = recap != nil
                 chatOpen = false
@@ -198,6 +210,7 @@ private struct LiveStage: View {
                 productOpen = false
             }
         }
+        .moderationDialog(session: session, message: $selectedForModeration)
         .background(Color.black)
         .font(theme.font(16))
         .tint(theme.accent)
@@ -238,10 +251,11 @@ private struct LiveStage: View {
             Group {
                 switch session.role {
                 case .host:
-                    BadgedDockButton(symbol: "⚙️", label: "Gestion", badge: session.joinRequests.count) { stageOpen = true }
+                    BadgedDockButton(symbol: "⚙️", label: "Gestion", badge: session.joinRequests.count) { managementOpen = true }
                 case .cohost:
                     Button("Redescendre") { confirmingLeaveStage = true }
                         .buttonStyle(.borderedProminent)
+                    BadgedDockButton(symbol: "⚙️", label: "Gestion", badge: 0) { managementOpen = true }
                 case .viewer:
                     JoinRequestButton(session: session) { stageError = $0 }
                 case .unknown, nil:
@@ -267,7 +281,7 @@ private struct LiveStage: View {
         reactionsOpen = false
         audienceOpen = false
         recapOpen = false
-        stageOpen = false
+        managementOpen = false
     }
 
     private func leaveStage() async {
@@ -306,6 +320,14 @@ private struct LiveStage: View {
         }
     }
 
+    private var showsCloseButton: Bool {
+        switch session.status {
+        case .ended: recap == nil
+        case .banned: true
+        default: false
+        }
+    }
+
     private var statusNotice: String? {
         switch session.status {
         case .connecting: "Connexion au Live…"
@@ -314,7 +336,7 @@ private struct LiveStage: View {
         case .ended(let reason, _):
             recap != nil ? nil : (reason == .hostTimeout ? "Le Live est terminé : l’Hôte n’est pas revenu." : "Le Live est terminé.")
         case .replaced: "Ce Live est ouvert sur un autre appareil."
-        case .banned: "Vous avez été exclu de ce Live."
+        case .banned: "Vous avez été exclu de ce Live. Vous pouvez rejoindre d’autres Lives."
         case .failed(.liveNotFound): "Ce Live n'existe pas ou est terminé."
         case .failed: "Impossible de rejoindre ce Live."
         case .left: nil
