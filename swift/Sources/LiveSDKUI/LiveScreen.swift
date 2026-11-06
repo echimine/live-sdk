@@ -305,7 +305,7 @@ private struct HostPresenceBanner: View {
     @State private var wasDisconnected = false
 
     var body: some View {
-        Group {
+        VStack(spacing: 0) {
             if !connected || returned {
                 Text(connected ? "Hôte revenu" : "Hôte déconnecté")
                     .font(theme.font(15, weight: .semibold))
