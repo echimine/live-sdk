@@ -12,9 +12,13 @@ let package = Package(
         .library(name: "LiveSDK", targets: ["LiveSDK"]),
         .library(name: "LiveSDKUI", targets: ["LiveSDKUI"]),
     ],
+    dependencies: [
+        .package(url: "https://github.com/livekit/client-sdk-swift.git", from: "2.19.0"),
+    ],
     targets: [
         .target(
             name: "LiveSDK",
+            dependencies: [.product(name: "LiveKit", package: "client-sdk-swift")],
             path: "swift/Sources/LiveSDK"
         ),
         .target(
