@@ -2,6 +2,7 @@ plugins {
     alias(libs.plugins.android.library)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
+    `maven-publish`
 }
 
 android {
@@ -20,16 +21,44 @@ android {
     buildFeatures {
         compose = true
     }
+
+    publishing {
+        singleVariant("release") {
+            withSourcesJar()
+        }
+    }
 }
 
 kotlin {
+    explicitApi()
     compilerOptions {
         jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+        optIn.add("fr.echimine.live.core.InternalLiveSdkApi")
     }
 }
 
 dependencies {
     api(project(":core"))
-    implementation(platform(libs.compose.bom))
-    implementation(libs.compose.ui)
+    api(platform(libs.compose.bom))
+    api(libs.compose.ui)
+    implementation(libs.compose.foundation)
+    implementation(libs.compose.material3)
+    implementation(libs.activity.compose)
+    implementation(libs.lifecycle.runtime.compose)
+    implementation(libs.coil.compose)
+    implementation(libs.coil.network.okhttp)
+    // Média seul (ADR 0002) ; aucun type LiveKit dans l'API publique.
+    implementation(libs.livekit.android)
+}
+
+// JitPack : com.github.echimine.live-sdk:ui:<tag X.Y.Z> (voir jitpack.yml à la racine).
+publishing {
+    publications {
+        register<MavenPublication>("release") {
+            groupId = "com.github.echimine.live-sdk"
+            artifactId = "ui"
+            version = providers.environmentVariable("VERSION").getOrElse("0.0.0-SNAPSHOT")
+            afterEvaluate { from(components["release"]) }
+        }
+    }
 }
