@@ -1,0 +1,114 @@
+# Stack de production de live.echimine.fr. Modèle versionné du fichier déposé sur
+# le VPS : /opt/www/live.echimine.fr/prod/docker-compose.yml, à côté de
+# livekit.yaml, member-apps.json, .env (chmod 600) et .discord-webhook-url.
+# IMAGE_TAG (SHA du commit) est fourni par le webhook de déploiement.
+name: live
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: 10m
+    max-file: "3"
+
+x-diun: &diun
+  diun.enable: "true"
+  diun.notify_on: new;update
+  diun.watch_repo: "false"
+
+services:
+  db:
+    image: postgres:17-alpine
+    container_name: live-db
+    restart: unless-stopped
+    security_opt: [no-new-privileges:true]
+    logging: *logging
+    stop_grace_period: 30s
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
+      POSTGRES_DB: ${POSTGRES_DB:?}
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    networks: [internal]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    labels: *diun
+
+  server:
+    image: ghcr.io/echimine/live-server:${IMAGE_TAG:-latest}
+    container_name: live-server
+    restart: unless-stopped
+    init: true
+    security_opt: [no-new-privileges:true]
+    logging: *logging
+    stop_grace_period: 15s
+    depends_on:
+      db: { condition: service_healthy }
+    environment:
+      PORT: "3000"
+      HOST: 0.0.0.0
+      DATABASE_URL: ${DATABASE_URL:?}
+      ADMIN_TOKEN: ${ADMIN_TOKEN:?}
+      MEMBER_APPS_FILE: /run/secrets/member-apps.json
+      LIVEKIT_URL: ${LIVEKIT_URL:-https://livekit.echimine.fr}
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:?}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:?}
+    volumes:
+      - ./member-apps.json:/run/secrets/member-apps.json:ro
+      - images:/data/images
+    # internal : Postgres ; traefik-public : Traefik et sortie vers LiveKit.
+    networks: [internal, traefik-public]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/health', {signal: AbortSignal.timeout(4000)}).then(r => process.exit(r.status < 500 ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    labels:
+      <<: *diun
+      traefik.enable: "true"
+      traefik.docker.network: traefik-public
+      traefik.http.routers.live.rule: Host(`live.echimine.fr`)
+      traefik.http.routers.live.entrypoints: websecure
+      traefik.http.routers.live.tls.certresolver: letsencrypt
+      traefik.http.services.live.loadbalancer.server.port: "3000"
+
+  livekit:
+    image: livekit/livekit-server:v1.9
+    container_name: live-livekit
+    restart: unless-stopped
+    security_opt: [no-new-privileges:true]
+    logging: *logging
+    stop_grace_period: 30s
+    # Média WebRTC : ports UDP/TCP directement sur l'hôte. Le signal (7880) est
+    # routé par le file provider Traefik (deploy/traefik/livekit.yml).
+    network_mode: host
+    command: --config /etc/livekit.yaml
+    environment:
+      LIVEKIT_KEYS: ${LIVEKIT_KEYS:?}
+    volumes:
+      - ./livekit.yaml:/etc/livekit.yaml:ro
+    cpus: 2
+    mem_limit: 2g
+    healthcheck:
+      # Image alpine : wget de busybox disponible ; GET / répond « OK ».
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:7880/"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+    labels: *diun
+
+volumes:
+  db-data:
+  # Images du Produit épinglé.
+  images:
+
+networks:
+  internal:
+    internal: true
+  traefik-public:
+    external: true

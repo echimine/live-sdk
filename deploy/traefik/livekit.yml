@@ -1,0 +1,18 @@
+# Modèle du file provider Traefik, à déposer sur le VPS dans
+# /opt/proxy/config/dynamic/livekit.yml (relu à chaud).
+# LiveKit tourne en network_mode: host : Traefik le joint par la passerelle du
+# réseau traefik-public (= l'hôte). Requiert une règle UFW autorisant 7880/tcp
+# depuis ce bridge uniquement.
+http:
+  routers:
+    livekit:
+      rule: Host(`livekit.echimine.fr`)
+      entryPoints: [websecure]
+      tls:
+        certResolver: letsencrypt
+      service: livekit
+  services:
+    livekit:
+      loadBalancer:
+        servers:
+          - url: http://172.19.0.1:7880

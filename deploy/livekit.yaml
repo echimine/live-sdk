@@ -1,0 +1,28 @@
+# Config LiveKit de production (livekit.echimine.fr), sans secret.
+# Les clés API viennent de la variable d'environnement LIVEKIT_KEYS ("<key>: <secret>").
+# Le conteneur tourne en network_mode: host : les ports ci-dessous sont ceux de l'hôte.
+# Signal (7880) : jamais exposé sur Internet, Traefik y accède par le file provider.
+port: 7880
+
+rtc:
+  # Repli ICE/TCP.
+  tcp_port: 7881
+  # Média UDP : la plage 50000-60000 est ouverte dans UFW (7882/udp ne l'est pas).
+  # Elle est partagée avec les relais TURN (58001-60000, voir plus bas).
+  port_range_start: 50000
+  port_range_end: 58000
+  # L'IP publique est portée directement par l'interface de l'hôte.
+  use_external_ip: false
+
+# TURN embarqué, UDP seulement : Traefik occupe 443, pas de TURN/TLS.
+turn:
+  enabled: true
+  domain: livekit.echimine.fr
+  udp_port: 3478
+  # Ports de relais : par défaut 30000-40000, fermés dans UFW.
+  relay_range_start: 58001
+  relay_range_end: 60000
+
+logging:
+  level: info
+  json: true

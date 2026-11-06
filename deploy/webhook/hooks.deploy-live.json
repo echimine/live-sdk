@@ -1,0 +1,29 @@
+[
+  {
+    "id": "deploy-live",
+    "execute-command": "/scripts/deploy-live.sh",
+    "command-working-directory": "/opt/www/live.echimine.fr/prod",
+    "response-message": "live deploy triggered",
+    "pass-environment-to-command": [
+      { "source": "payload", "name": "tag", "envname": "IMAGE_TAG" }
+    ],
+    "trigger-rule": {
+      "and": [
+        {
+          "match": {
+            "type": "value",
+            "value": "{{ getenv `DEPLOY_TOKEN_LIVE` }}",
+            "parameter": { "source": "header", "name": "X-Deploy-Token" }
+          }
+        },
+        {
+          "match": {
+            "type": "regex",
+            "regex": "^[0-9a-f]{7,40}$",
+            "parameter": { "source": "payload", "name": "tag" }
+          }
+        }
+      ]
+    }
+  }
+]
