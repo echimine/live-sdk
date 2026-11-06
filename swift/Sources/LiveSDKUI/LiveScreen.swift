@@ -82,9 +82,12 @@ private struct LiveStage: View {
     @State private var reactionsOpen = false
     @State private var audienceOpen = false
     @State private var recapOpen = false
+    @State private var stageOpen = false
     @State private var confirmingEnd = false
+    @State private var confirmingLeaveStage = false
     @State private var ending = false
     @State private var commandError: String?
+    @State private var stageError: String?
 
     private var interactive: Bool { session.status == .connected }
     private var recap: LiveRecap? {
@@ -94,7 +97,7 @@ private struct LiveStage: View {
 
     var body: some View {
         ZStack {
-            HostVideo(session: session).ignoresSafeArea()
+            StageVideo(session: session).ignoresSafeArea()
             ReactionsOverlay(session: session)
             PurchaseToast(session: session)
             if let notice = statusNotice {
@@ -128,7 +131,7 @@ private struct LiveStage: View {
             .padding(16)
         }
         .sheet(isPresented: Binding(
-            get: { chatOpen || reactionsOpen || audienceOpen || recapOpen || productOpen },
+            get: { chatOpen || reactionsOpen || audienceOpen || recapOpen || productOpen || stageOpen },
             set: { if !$0 { closeSheets() } }
         ), onDismiss: {
             if recap != nil { onClose() }
@@ -137,6 +140,8 @@ private struct LiveStage: View {
                 if let recap {
                     NavigationStack { LiveRecapSheet(recap: recap, onClose: closeSheets) }
                         .interactiveDismissDisabled()
+                } else if stageOpen {
+                    NavigationStack { StageManagementSheet(session: session, onClose: closeSheets) }
                 } else if productOpen {
                     NavigationStack { ProductSheet(session: session, source: productSource) }
                 } else if audienceOpen {
@@ -161,10 +166,30 @@ private struct LiveStage: View {
         } message: {
             Text(commandError ?? "Réessayez.")
         }
+        .confirmationDialog("Redescendre de l’écran ?", isPresented: $confirmingLeaveStage, titleVisibility: .visible) {
+            Button("Redescendre", role: .destructive) { Task { await leaveStage() } }
+            Button("Annuler", role: .cancel) {}
+        } message: {
+            Text("Votre caméra et votre micro seront coupés ; vous restez dans le Live.")
+        }
+        .alert("Montée à l’écran", isPresented: Binding(
+            get: { stageError != nil }, set: { if !$0 { stageError = nil } }
+        )) {
+            Button("OK") { stageError = nil }
+        } message: {
+            Text(stageError ?? "Réessayez.")
+        }
+        .onChange(of: session.role) { _, role in
+            if role != .host { stageOpen = false }
+            if role != .cohost { confirmingLeaveStage = false }
+        }
         .onChange(of: session.status, initial: true) { _, _ in
             if !interactive {
                 confirmingEnd = false
+                confirmingLeaveStage = false
                 commandError = nil
+                stageError = nil
+                stageOpen = false
                 // Garder la même présentation lors du passage au récapitulatif.
                 recapOpen = recap != nil
                 chatOpen = false
@@ -211,6 +236,17 @@ private struct LiveStage: View {
                     .disabled(ending)
             }
             Group {
+                switch session.role {
+                case .host:
+                    BadgedDockButton(symbol: "⚙️", label: "Gestion", badge: session.joinRequests.count) { stageOpen = true }
+                case .cohost:
+                    Button("Redescendre") { confirmingLeaveStage = true }
+                        .buttonStyle(.borderedProminent)
+                case .viewer:
+                    JoinRequestButton(session: session) { stageError = $0 }
+                case .unknown, nil:
+                    EmptyView()
+                }
                 if let quick = session.config.reactions.first {
                     QuickReactionButton(emoji: quick) {
                         session.react(quick)
@@ -231,6 +267,19 @@ private struct LiveStage: View {
         reactionsOpen = false
         audienceOpen = false
         recapOpen = false
+        stageOpen = false
+    }
+
+    private func leaveStage() async {
+        guard interactive, session.role == .cohost else { return }
+        do {
+            try await session.send(.leaveStage)
+        } catch {
+            // Déjà redescendu (retiré par l'Hôte entre-temps) : rien à signaler.
+            if interactive && session.role == .cohost {
+                stageError = error.message.isEmpty ? "Impossible de redescendre. Réessayez." : error.message
+            }
+        }
     }
 
     private func quit() {

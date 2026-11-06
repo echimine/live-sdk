@@ -42,8 +42,18 @@ public final class LiveSession {
     public private(set) var reactionsTotal = 0
     public private(set) var messages: [ChatMessage] = []
     public private(set) var joinRequests: [Participant] = []
+    /// Ma Demande de montée attend la réponse de l'Hôte (le serveur ne signale pas un refus).
+    public private(set) var joinRequestPending = false
     public private(set) var moderation: Moderation?
     public private(set) var chatLocked = false
+
+    /// Limite fixée par le serveur : une 6e acceptation est refusée (`cohost_limit`).
+    public nonisolated static let maxCohosts = 5
+
+    /// À l'écran, dans l'ordre de la mosaïque : l'Hôte, puis les Co-hôtes par ordre de montée.
+    public var stage: [Participant] {
+        (host.map { [$0] } ?? []) + cohosts
+    }
 
     private let url: URL
     private let tokenProvider: TokenProvider
@@ -62,6 +72,7 @@ public final class LiveSession {
     private let media: any MediaConnector
     private var outbox: Task<Void, Never>?
     private var pending: [String: CheckedContinuation<Result<Void, LiveCommandError>, Never>] = [:]
+    private var sentCommands: [String: LiveCommand] = [:]
 
     public let config: LiveConfig
 
@@ -154,11 +165,22 @@ public final class LiveSession {
         }
         let result = await withCheckedContinuation { continuation in
             pending[ref] = continuation
+            sentCommands[ref] = command
             enqueue(text, on: connection) { [weak self] in
                 self?.resolve(ref, with: .failure(LiveCommandError(code: .disconnected, message: "")))
             }
         }
         try result.get()
+    }
+
+    private func applyAcknowledged(_ command: LiveCommand) {
+        switch command {
+        case .requestToJoin: joinRequestPending = true
+        case .cancelJoinRequest: joinRequestPending = false
+        // Le serveur n'annonce pas un refus : la demande disparaît à l'ack.
+        case .declineJoin(let participantId): joinRequests.removeAll { $0.id == participantId }
+        default: break
+        }
     }
 
     public func react(_ emoji: String) {
@@ -223,6 +245,9 @@ public final class LiveSession {
     }
 
     private func resolve(_ ref: String, with result: Result<Void, LiveCommandError>) {
+        let command = sentCommands.removeValue(forKey: ref)
+        // Appliqué à la réception de l'ack, dans l'ordre des messages du serveur.
+        if case .success = result, let command { applyAcknowledged(command) }
         pending.removeValue(forKey: ref)?.resume(returning: result)
     }
 
@@ -287,6 +312,7 @@ public final class LiveSession {
     private func failPendingCommands() {
         let waiting = pending.values
         pending = [:]
+        sentCommands = [:]
         waiting.forEach { $0.resume(returning: .failure(LiveCommandError(code: .disconnected, message: ""))) }
     }
 
@@ -337,6 +363,7 @@ public final class LiveSession {
             hostConnected = true
         case .roleChanged(let change):
             apply(change)
+            await syncPublication()
         case .joinRequested(let participant):
             joinRequests = joinRequests.filter { $0.id != participant.id } + [participant]
         case .joinRequestCancelled(let participantId):
@@ -369,11 +396,22 @@ public final class LiveSession {
                 return
             }
         }
-        if role == .host && !mediaPublished {
-            mediaPublished = (try? await media.publishCameraAndMicrophone()) != nil
-        }
+        await syncPublication()
         if status.isFinal {
             await media.disconnect()
+        }
+    }
+
+    /// Les Animateurs publient caméra et micro dans la room déjà connectée : pas de nouveau jeton.
+    private func syncPublication() async {
+        guard mediaConnected, !status.isFinal else { return }
+        let onStage = role == .host || role == .cohost
+        if onStage && !mediaPublished {
+            mediaPublished = (try? await media.publishCameraAndMicrophone()) != nil
+        } else if !onStage && mediaPublished {
+            // Le serveur coupe aussi la permission : un échec ici laisse seulement les pistes locales.
+            try? await media.unpublishCameraAndMicrophone()
+            mediaPublished = false
         }
     }
 
@@ -391,8 +429,10 @@ public final class LiveSession {
     private func apply(_ change: RoleChanged) {
         let others = cohosts.filter { $0.id != change.participant.id }
         cohosts = change.role == .cohost ? others + [change.participant] : others
+        joinRequests.removeAll { $0.id == change.participant.id }
         if change.participant.id == you?.id {
             role = change.role
+            joinRequestPending = false
         }
     }
 
@@ -409,6 +449,8 @@ public final class LiveSession {
         reactionsTotal = snapshot.reactionsTotal
         messages = snapshot.messages
         joinRequests = snapshot.joinRequests ?? []
+        // Les Demandes de montée en attente ne survivent pas à la fermeture du socket.
+        joinRequestPending = false
         moderation = snapshot.moderation
     }
 }
