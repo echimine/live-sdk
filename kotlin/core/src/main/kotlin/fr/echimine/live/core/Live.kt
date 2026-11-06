@@ -124,6 +124,7 @@ public class Live internal constructor(
     parent: CoroutineScope,
     dispatcher: CoroutineDispatcher,
     private val timeSource: TimeSource,
+    private val uploadImage: suspend (ByteArray) -> LiveResult<String>,
 ) {
     private val scope = CoroutineScope(SupervisorJob(parent.coroutineContext[Job]) + dispatcher)
     private val stateFlow = MutableStateFlow(LiveState(LiveState.Connection.Connecting))
@@ -245,13 +246,33 @@ public class Live internal constructor(
     public suspend fun deleteMessage(messageId: String): LiveResult<Unit> =
         command { Command.DeleteMessage(it, messageId) }
 
-    /** Animateur : épingle un produit. [price] en centimes, [currency] ISO 4217, [imageUrl] https. */
+    /**
+     * Animateur : épingle un produit, ou remplace le Produit épinglé. [price] en centimes,
+     * [currency] code ISO 4217. Un produit invalide (nom vide ou au-delà de `config.productNameMaxLength`
+     * après `trim`, prix hors de 0 à [MAX_PRODUCT_PRICE], devise mal formée) est refusé sans rien envoyer
+     * ([LiveErrorCode.InvalidProduct]). Une [ProductImage.Data] est d'abord réduite puis envoyée au serveur commun.
+     */
     public suspend fun pinProduct(
         name: String,
         price: Int,
         currency: String,
-        imageUrl: String? = null,
-    ): LiveResult<Unit> = command { Command.PinProduct(it, name, price, currency, imageUrl) }
+        image: ProductImage? = null,
+    ): LiveResult<Unit> {
+        val trimmed = name.trim()
+        @OptIn(InternalLiveSdkApi::class)
+        productProblem(trimmed, price, currency, config.value.productNameMaxLength)?.let {
+            return LiveResult.Failure(LiveError(LiveErrorCode.InvalidProduct, it))
+        }
+        val imageUrl = when (image) {
+            null -> null
+            is ProductImage.Url -> image.url
+            is ProductImage.Data -> when (val uploaded = uploadImage(image.bytes)) {
+                is LiveResult.Success -> uploaded.value
+                is LiveResult.Failure -> return uploaded
+            }
+        }
+        return command { Command.PinProduct(it, trimmed, price, currency, imageUrl) }
+    }
 
     public suspend fun unpinProduct(): LiveResult<Unit> = command { Command.UnpinProduct(it) }
 

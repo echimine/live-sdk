@@ -80,8 +80,8 @@ private fun DemoApp(profile: Profile) {
             onLaunched = { screen = Screen.Host(it) },
             onClose = { screen = Screen.List },
         )
-        is Screen.Watch -> LiveScreen(current.liveId, onClose = { screen = Screen.List })
-        is Screen.Host -> LiveScreen(current.live, onClose = { screen = Screen.List })
+        is Screen.Watch -> LiveScreen(current.liveId, onClose = { screen = Screen.List }, productSource = DemoProductSource)
+        is Screen.Host -> LiveScreen(current.live, onClose = { screen = Screen.List }, productSource = DemoProductSource)
     }
 }
 

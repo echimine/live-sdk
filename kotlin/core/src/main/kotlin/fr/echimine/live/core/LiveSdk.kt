@@ -1,6 +1,7 @@
 package fr.echimine.live.core
 
 import fr.echimine.live.core.protocol.HttpErrorBody
+import fr.echimine.live.core.protocol.ImagesUploadResponse
 import fr.echimine.live.core.protocol.LivesCreateRequest
 import fr.echimine.live.core.protocol.LivesCreateResponse
 import fr.echimine.live.core.protocol.LivesListResponse
@@ -17,6 +18,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.DeserializationStrategy
 import kotlinx.serialization.SerializationException
@@ -70,8 +72,9 @@ public object LiveSdk {
         transport: LiveTransport,
         dispatcher: CoroutineDispatcher,
         timeSource: TimeSource,
+        imageReducer: ImageReducer = AndroidImageReducer,
     ): LiveClient {
-        val client = LiveClient(serverUrl, tokenProvider, transport, dispatcher, timeSource)
+        val client = LiveClient(serverUrl, tokenProvider, transport, dispatcher, timeSource, imageReducer)
         synchronized(this) {
             current?.close()
             current = client
@@ -87,6 +90,7 @@ public class LiveClient internal constructor(
     private val transport: LiveTransport,
     private val dispatcher: CoroutineDispatcher,
     private val timeSource: TimeSource,
+    private val imageReducer: ImageReducer,
 ) {
     private val baseUrl = serverUrl.trimEnd('/')
     private val scope = CoroutineScope(SupervisorJob() + dispatcher)
@@ -113,7 +117,7 @@ public class LiveClient internal constructor(
      */
     public suspend fun startLive(title: String? = null): LiveResult<Live> {
         val body = Wire.json.encodeToString(LivesCreateRequest.serializer(), LivesCreateRequest(title))
-        return http("POST", "/v1/lives", body, LivesCreateResponse.serializer()).map { openLive(it.live.id) }
+        return http("POST", "/v1/lives", HttpBody.Json(body), LivesCreateResponse.serializer()).map { openLive(it.live.id) }
     }
 
     /**
@@ -124,7 +128,16 @@ public class LiveClient internal constructor(
         withTimeoutOrNull(CONFIG_WAIT) { refreshConfigIfStale() }
         val path = URLEncoder.encode(id, "UTF-8").replace("+", "%20")
         val wsUrl = webSocketBase() + "/v1/lives/$path/ws"
-        return Live(id, wsUrl, tokenProvider, transport, config, scope, dispatcher, timeSource).also { it.start() }
+        return Live(id, wsUrl, tokenProvider, transport, config, scope, dispatcher, timeSource, ::uploadProductImage)
+            .also { it.start() }
+    }
+
+    /** Réduit une photo (1024 px au plus) puis l'envoie via `POST /v1/images` ; rend son URL. */
+    private suspend fun uploadProductImage(bytes: ByteArray): LiveResult<String> {
+        val image = withContext(dispatcher) { imageReducer.reduce(bytes, MAX_IMAGE_SIDE) }
+            ?: return failure(LiveErrorCode.InvalidImage, "Image illisible : JPEG, PNG ou WebP attendu.")
+        return http("POST", "/v1/images", HttpBody.Binary(image.bytes, image.contentType), ImagesUploadResponse.serializer())
+            .map { it.url }
     }
 
     /** Ferme le client et tous les Lives qu'il a ouverts. */
@@ -166,16 +179,27 @@ public class LiveClient internal constructor(
     private suspend fun authorization(): Map<String, String>? =
         catchingFailures { mapOf("Authorization" to "Bearer ${tokenProvider()}") }.getOrNull()
 
+    private sealed interface HttpBody {
+        data class Json(val text: String) : HttpBody
+
+        class Binary(val bytes: ByteArray, val contentType: String) : HttpBody
+    }
+
     private suspend fun <T> http(
         method: String,
         path: String,
-        body: String?,
+        body: HttpBody?,
         deserializer: DeserializationStrategy<T>,
     ): LiveResult<T> {
         val auth = authorization()
             ?: return failure(LiveErrorCode.TokenUnavailable, "Le Jeton de Participant n'a pas pu être obtenu.")
-        val headers = if (body != null) auth + ("Content-Type" to "application/json") else auth
-        val response = catchingFailures { transport.request(HttpRequest(method, baseUrl + path, headers, body)) }
+        val request = when (body) {
+            null -> HttpRequest(method, baseUrl + path, auth)
+            is HttpBody.Json -> HttpRequest(method, baseUrl + path, auth + ("Content-Type" to "application/json"), body.text)
+            is HttpBody.Binary ->
+                HttpRequest(method, baseUrl + path, auth + ("Content-Type" to body.contentType), bytes = body.bytes)
+        }
+        val response = catchingFailures { transport.request(request) }
             .getOrElse { return failure(LiveErrorCode.Network, it.message ?: "Serveur injoignable.") }
         if (response.status !in 200..299) return LiveResult.Failure(httpError(response))
         return try {
@@ -219,5 +243,6 @@ public class LiveClient internal constructor(
     private companion object {
         val CONFIG_MAX_AGE = 5.minutes
         val CONFIG_WAIT = 5.seconds
+        const val MAX_IMAGE_SIDE = 1024
     }
 }

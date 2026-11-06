@@ -44,6 +44,9 @@ public enum class LiveErrorCode(internal val wire: String?) {
     /** Serveur injoignable. */
     Network(null),
 
+    /** Photo du produit illisible (ni JPEG, ni PNG, ni WebP). */
+    InvalidImage(null),
+
     /** Le `tokenProvider` de l'App membre a échoué. */
     TokenUnavailable(null),
 

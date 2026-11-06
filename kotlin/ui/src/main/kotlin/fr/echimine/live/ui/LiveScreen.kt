@@ -45,6 +45,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import fr.echimine.live.core.ChatMessage
 import fr.echimine.live.core.Live
 import fr.echimine.live.core.LiveClient
 import fr.echimine.live.core.LiveEvent
@@ -55,7 +56,8 @@ import fr.echimine.live.core.Participant
 
 /**
  * Ouvre le Live [liveId] et l'affiche en plein écran ; le quitte quand l'écran disparaît.
- * Pour brancher ses propres liens et boutons.
+ * Pour brancher ses propres liens et boutons. [productSource] : le catalogue de l'App membre,
+ * proposé aux Animateurs pour préremplir le produit à épingler.
  */
 @Composable
 public fun LiveScreen(
@@ -63,6 +65,7 @@ public fun LiveScreen(
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
     client: LiveClient = LiveSdk.client,
+    productSource: ProductSource? = null,
 ) {
     val live by produceState<Live?>(null, client, liveId) {
         val opened = client.openLive(liveId)
@@ -73,19 +76,21 @@ public fun LiveScreen(
     if (opened == null) {
         LiveSdkTheme { Box(modifier.fillMaxSize().background(Color.Black), Alignment.Center) { Loading() } }
     } else {
-        LiveScreen(opened, onClose, modifier)
+        LiveScreen(opened, onClose, modifier, productSource)
     }
 }
 
 /**
- * Un Live ouvert en plein écran : vidéo de l'Hôte, barre du haut (libellé du Live, ✕) et dock.
- * Quitte [live] quand l'écran disparaît.
+ * Un Live ouvert en plein écran : vidéo de l'Hôte, barre du haut (libellé du Live, ✕), Produit épinglé et dock.
+ * Quitte [live] quand l'écran disparaît. [productSource] : le catalogue de l'App membre, proposé
+ * aux Animateurs pour préremplir le produit à épingler.
  */
 @Composable
 public fun LiveScreen(
     live: Live,
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
+    productSource: ProductSource? = null,
 ) {
     DisposableEffect(live) { onDispose { live.close() } }
     val state by live.state.collectAsStateWithLifecycle()
@@ -100,12 +105,21 @@ public fun LiveScreen(
     var reactionsOpen by rememberSaveable(live.id) { mutableStateOf(false) }
     var audienceOpen by rememberSaveable(live.id) { mutableStateOf(false) }
     var endOpen by rememberSaveable(live.id) { mutableStateOf(false) }
+    var productOpen by rememberSaveable(live.id) { mutableStateOf(false) }
+    var pinOpen by rememberSaveable(live.id) { mutableStateOf(false) }
+    var announcement by remember(live) { mutableStateOf<ChatMessage.Purchase?>(null) }
+    val animator = details?.role?.isAnimator == true
     // L'Hôte termine son Live en le quittant ; les autres le quittent simplement.
     val hosting = hostIsYou && interactive
     val onQuit = { if (hosting) endOpen = true else onClose() }
     val floating = remember(live) { FloatingReactions() }
     LaunchedEffect(live) {
-        live.events.collect { event -> if (event is LiveEvent.ReactionsReceived) floating.launch(event.counts) }
+        live.events.collect { event ->
+            when (event) {
+                is LiveEvent.ReactionsReceived -> floating.launch(event.counts)
+                is LiveEvent.PurchaseAnnounced -> announcement = event.message
+            }
+        }
     }
 
     LiveSdkTheme {
@@ -119,11 +133,16 @@ public fun LiveScreen(
                     if (interactive && !hostIsYou && state.connection == Connection.Connected) {
                         HostPresenceBanner(details.hostConnected, Modifier.align(Alignment.TopCenter).padding(top = 8.dp))
                     }
+                    PurchaseToast(announcement, Modifier.align(Alignment.TopCenter).padding(top = 52.dp, start = 16.dp, end = 16.dp))
                     StatusOverlay(state, hasVideo = camera != null, onClose = onClose)
                     FloatingReactionsLayer(
                         floating,
                         Modifier.align(Alignment.BottomEnd).width(120.dp).fillMaxHeight(0.7f),
                     )
+                }
+                val pinned = details?.pinnedProduct
+                if (interactive && pinned != null) {
+                    PinnedProductPill(pinned, onOpen = { productOpen = true }, modifier = Modifier.padding(start = 8.dp, bottom = 8.dp))
                 }
                 if (interactive) {
                     ChatPreview(
@@ -142,6 +161,14 @@ public fun LiveScreen(
                             description = "Toutes les Réactions",
                             modifier = Modifier.clickable { reactionsOpen = true },
                         )
+                        // 🛍 : l'Animateur épingle ou change le produit ; le Spectateur ouvre la fiche.
+                        if (animator || details.pinnedProduct != null) {
+                            DockButton(
+                                "🛍",
+                                description = if (animator) "Épingler un produit" else "Voir le produit",
+                                modifier = Modifier.clickable { if (animator) pinOpen = true else productOpen = true },
+                            )
+                        }
                     }
                 }
             }
@@ -153,6 +180,12 @@ public fun LiveScreen(
             }
             if (audienceOpen && interactive) {
                 AudienceSheet(details.audience, onDismiss = { audienceOpen = false })
+            }
+            if (productOpen && interactive) {
+                ProductSheet(live, onDismiss = { productOpen = false })
+            }
+            if (pinOpen && interactive && animator) {
+                PinProductSheet(live, config, details.pinnedProduct, productSource, onDismiss = { pinOpen = false })
             }
             if (endOpen && interactive) {
                 EndLiveDialog(live, onDismiss = { endOpen = false })
@@ -244,7 +277,7 @@ private fun TopBar(state: LiveState, hosting: Boolean, onClose: () -> Unit, onOp
     }
 }
 
-/** Le dock, en bas : 💬 chat, ❤️ Réaction rapide, 😀 toutes les Réactions (puis 🛍, 👥, ✋). */
+/** Le dock, en bas : 💬 chat, ❤️ Réaction rapide, 😀 toutes les Réactions, 🛍 produit (puis 👥, ✋). */
 @Composable
 private fun Dock(content: @Composable RowScope.() -> Unit) {
     Row(
