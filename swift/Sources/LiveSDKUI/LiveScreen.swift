@@ -76,6 +76,8 @@ private struct LiveStage: View {
     let session: LiveSession
     let onClose: () -> Void
     @Environment(\.liveTheme) private var theme
+    @Environment(\.productSource) private var productSource
+    @State private var productOpen = false
     @State private var chatOpen = false
     @State private var reactionsOpen = false
     @State private var audienceOpen = false
@@ -97,6 +99,7 @@ private struct LiveStage: View {
         ZStack {
             StageVideo(session: session).ignoresSafeArea()
             ReactionsOverlay(session: session)
+            PurchaseToast(session: session)
             if let notice = statusNotice {
                 Text(notice)
                     .font(theme.font(15, weight: .semibold))
@@ -107,6 +110,12 @@ private struct LiveStage: View {
             }
             VStack(spacing: 12) {
                 topBar
+                if interactive, let product = session.pinnedProduct {
+                    Button { productOpen = true } label: {
+                        Label("\(product.name) · \(PriceText.format(cents: product.price, currency: product.currency))", systemImage: "bag.fill")
+                            .padding(10).background(.regularMaterial, in: Capsule())
+                    }
+                }
                 if interactive && session.role != .host {
                     HostPresenceBanner(connected: session.hostConnected)
                 }
@@ -122,7 +131,7 @@ private struct LiveStage: View {
             .padding(16)
         }
         .sheet(isPresented: Binding(
-            get: { chatOpen || reactionsOpen || audienceOpen || recapOpen || stageOpen },
+            get: { chatOpen || reactionsOpen || audienceOpen || recapOpen || productOpen || stageOpen },
             set: { if !$0 { closeSheets() } }
         ), onDismiss: {
             if recap != nil { onClose() }
@@ -133,6 +142,8 @@ private struct LiveStage: View {
                         .interactiveDismissDisabled()
                 } else if stageOpen {
                     NavigationStack { StageManagementSheet(session: session, onClose: closeSheets) }
+                } else if productOpen {
+                    NavigationStack { ProductSheet(session: session, source: productSource) }
                 } else if audienceOpen {
                     NavigationStack { AudienceSheet(audience: session.audience, onClose: closeSheets) }
                 } else if chatOpen {
@@ -184,6 +195,7 @@ private struct LiveStage: View {
                 chatOpen = false
                 reactionsOpen = false
                 audienceOpen = false
+                productOpen = false
             }
         }
         .background(Color.black)
@@ -217,6 +229,7 @@ private struct LiveStage: View {
     private var dock: some View {
         HStack(spacing: 12) {
             DockButton(symbol: "💬", label: "Ouvrir le chat") { chatOpen = true }
+            DockButton(symbol: "🛍", label: "Produit épinglé") { productOpen = true }
             Spacer()
             if session.role == .host {
                 Button("Terminer le Live", role: .destructive) { confirmingEnd = true }
@@ -249,6 +262,7 @@ private struct LiveStage: View {
     }
 
     private func closeSheets() {
+        productOpen = false
         chatOpen = false
         reactionsOpen = false
         audienceOpen = false

@@ -22,6 +22,7 @@ public enum LiveStatus: Sendable, Hashable {
 
 public enum LiveEvent: Sendable, Hashable {
     case reactions([String: Int])
+    case purchase(ChatMessage)
 }
 
 @MainActor
@@ -96,6 +97,23 @@ public final class LiveSession {
         guard !status.isFinal else { return }
         task?.cancel()
         await finish(.left)
+    }
+
+    func uploadProductImage(_ data: Data) async throws -> URL {
+        guard status == .connected else { throw LiveCommandError(code: .disconnected, message: "") }
+        let encoded = try await Task.detached { try ProductImageEncoder.jpeg(data) }.value
+        guard encoded.count <= config.images.maxBytes, config.images.formats.contains("image/jpeg") else { throw ProductImageEncoder.invalidImage }
+        let token = try await tokenProvider()
+        var components = URLComponents(url: url, resolvingAgainstBaseURL: false)!
+        components.scheme = components.scheme == "ws" ? "http" : "https"
+        components.path = url.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().appending(path: "images").path
+        components.query = nil
+        let response = try await environment.http.send(HTTPRequest(method: "POST", url: components.url!, headers: ["Authorization": "Bearer \(token)", "Content-Type": "image/jpeg"], body: encoded))
+        guard (200..<300).contains(response.status) else {
+            let detail = try? WireCoding.decode(HTTPErrorBody.self, from: response.body).error
+            throw LiveSDKError.server(code: detail?.code ?? "http_\(response.status)", message: detail?.message ?? "Envoi de l’image impossible.")
+        }
+        return try WireCoding.decode(ImagesUploadResponse.self, from: response.body).url
     }
 
     public func sendMessage(_ text: String) async throws(LiveCommandError) {
@@ -327,6 +345,7 @@ public final class LiveSession {
         case .audience(let update):
             audience = update
         case .chatMessage(let message):
+            if case .purchase = message.content, !messages.contains(where: { $0.id == message.id }) { emit(.purchase(message)) }
             messages.append(message)
         case .messageDeleted(let messageId):
             messages.removeAll { $0.id == messageId }
