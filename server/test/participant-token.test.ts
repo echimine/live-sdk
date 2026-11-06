@@ -33,6 +33,25 @@ describe("Jeton de Participant", () => {
     expectInvalidToken(await listLives());
   });
 
+  it("une route inconnue sous /v1 exige aussi un jeton", async () => {
+    server = await startTestServer();
+
+    expectInvalidToken(await server.inject({ method: "GET", url: "/v1/inexistante" }));
+    expectInvalidToken(await server.inject({ method: "GET", url: "/v1/inexistante", headers: bearer("pas-un-jwt") }));
+  });
+
+  it("une route inconnue sous /v1 répond 404 avec un jeton valide", async () => {
+    server = await startTestServer();
+    const response = await server.inject({
+      method: "GET",
+      url: "/v1/inexistante",
+      headers: bearer(await participantToken()),
+    });
+
+    expect(response.statusCode).toBe(404);
+    expect(HttpError.parse(response.json()).error.code).toBe("not_found");
+  });
+
   it("refuse un jeton qui n'est pas un JWT", async () => {
     expectInvalidToken(await listLives(bearer("pas-un-jwt")));
   });
@@ -65,9 +84,26 @@ describe("Jeton de Participant", () => {
   });
 
   it.each([
+    ["vide", ""],
+    ["de 129 caractères", "u".repeat(129)],
+  ])("refuse un jeton dont le `sub` est %s", async (_label, sub) => {
+    const token = await participantToken({ sub });
+
+    expectInvalidToken(await listLives(bearer(token)));
+  });
+
+  it("accepte un `sub` de 128 caractères", async () => {
+    const token = await participantToken({ sub: "u".repeat(128) });
+
+    expect((await listLives(bearer(token))).statusCode).toBe(200);
+  });
+
+  it.each([
     ["absent", undefined],
     ["vide", ""],
     ["de 31 caractères", "a".repeat(31)],
+    ["de 31 graphèmes", "👍🏽".repeat(31)],
+    ["fait d'espaces", "   "],
     ["qui n'est pas une chaîne", 42],
   ])("refuse un jeton dont le `name` est %s", async (_label, name) => {
     const token = await participantToken({ name });
@@ -75,8 +111,13 @@ describe("Jeton de Participant", () => {
     expectInvalidToken(await listLives(bearer(token)));
   });
 
-  it("accepte un `name` de 30 caractères", async () => {
-    const token = await participantToken({ name: "é".repeat(30) });
+  it.each([
+    ["30 caractères", "é".repeat(30)],
+    ["16 emojis", "🎉".repeat(16)],
+    ["30 graphèmes composés", "👨‍👩‍👧".repeat(30)],
+    ["30 caractères entourés d'espaces", `  ${"a".repeat(30)}  `],
+  ])("accepte un `name` de %s", async (_label, name) => {
+    const token = await participantToken({ name });
 
     expect((await listLives(bearer(token))).statusCode).toBe(200);
   });

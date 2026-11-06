@@ -1,8 +1,12 @@
 import { decodeJwt, jwtVerify } from "jose";
+import { z } from "zod";
 import type { MemberApps } from "./member-apps.js";
-import { HttpsUrl, Participant } from "./protocol/index.js";
+import { HttpsUrl, Participant, ParticipantName } from "./protocol/index.js";
 
 export class InvalidParticipantToken extends Error {}
+
+/** Identifiant de l'utilisateur dans son App d'origine. */
+const Subject = z.string().min(1).max(128);
 
 /**
  * Vérifie un Jeton de Participant (JWT HS256 signé par le backend de l'App
@@ -36,15 +40,19 @@ export async function verifyParticipantToken(
     throw new InvalidParticipantToken("signature invalide ou jeton expiré");
   }
 
-  const name = Participant.shape.name.safeParse(payload.name);
+  const sub = Subject.safeParse(payload.sub);
+  if (!sub.success) {
+    throw new InvalidParticipantToken("`sub` vide ou de plus de 128 caractères");
+  }
+  const name = ParticipantName.safeParse(payload.name);
   if (!name.success) {
-    throw new InvalidParticipantToken("`name` absent ou hors 1–30 caractères");
+    throw new InvalidParticipantToken("`name` absent ou hors 1–30 caractères visibles");
   }
   // Un avatar non https est ignoré sans refuser le jeton : le SDK affiche l'initiale.
   const picture = HttpsUrl.safeParse(payload.picture);
 
   return {
-    id: `${iss as string}:${payload.sub}`,
+    id: `${iss as string}:${sub.data}`,
     app: iss as string,
     name: name.data,
     ...(picture.success && { picture: picture.data }),

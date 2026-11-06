@@ -6,9 +6,11 @@ import { SignJWT } from "jose";
 
 // Identifiant de l'App membre et secret HS256 transmis en privé par echimine.
 const APP_ID = process.env.LIVE_APP_ID ?? "demo-ios";
-const SECRET = new TextEncoder().encode(
-  process.env.LIVE_TOKEN_SECRET ?? "secret-factice-demo-ios-ne-jamais-utiliser-en-prod",
-);
+if (!process.env.LIVE_TOKEN_SECRET) {
+  console.error("LIVE_TOKEN_SECRET manquant : fournissez le secret HS256 de votre App membre.");
+  process.exit(1);
+}
+const SECRET = new TextEncoder().encode(process.env.LIVE_TOKEN_SECRET);
 
 const PORT = Number(process.env.PORT ?? 4000);
 
@@ -17,8 +19,15 @@ async function currentUser(_request) {
   return { id: "u_1042", username: "Léa", avatarUrl: "https://cdn.example.com/avatars/1042.jpg" };
 }
 
+const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+
+/** Tronque à 30 caractères visibles : un emoji composé n'est jamais coupé. */
+function truncateName(name) {
+  return Array.from(graphemes.segment(name.trim()), (s) => s.segment).slice(0, 30).join("");
+}
+
 async function signParticipantToken(user) {
-  const claims = { name: user.username.slice(0, 30) };
+  const claims = { name: truncateName(user.username) };
   // `picture` doit être en https, sinon le serveur commun l'ignore.
   if (user.avatarUrl?.startsWith("https://")) claims.picture = user.avatarUrl;
   return new SignJWT(claims)

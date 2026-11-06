@@ -62,9 +62,9 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
     return reply.code(health.status === "ok" ? 200 : 503).send(health);
   });
 
-  server.setNotFoundHandler((_request, reply) =>
-    sendError(reply, 404, { code: "not_found", message: "Ressource introuvable." }),
-  );
+  const notFound = (_request: FastifyRequest, reply: FastifyReply) =>
+    sendError(reply, 404, { code: "not_found", message: "Ressource introuvable." });
+  server.setNotFoundHandler(notFound);
 
   async function authenticate(request: FastifyRequest, reply: FastifyReply) {
     const match = /^Bearer (\S+)$/.exec(request.headers.authorization ?? "");
@@ -82,6 +82,8 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
   server.register(async (v1) => {
     v1.decorateRequest("participant", null as unknown as Participant);
     v1.addHook("onRequest", authenticate);
+    // Les hooks `onRequest` ne couvrent pas les routes inconnues : sans jeton valide, 401 avant le 404.
+    v1.setNotFoundHandler({ preHandler: authenticate }, notFound);
 
     // Provisoire : aucun Live n'existe tant que le lancement (S2) n'est pas fait.
     v1.get("/lives", async () => ({ lives: [] }));

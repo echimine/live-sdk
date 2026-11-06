@@ -51,11 +51,9 @@ services:
       PORT: "3000"
       HOST: 0.0.0.0
       DATABASE_URL: ${DATABASE_URL:?}
-      ADMIN_TOKEN: ${ADMIN_TOKEN:?}
       MEMBER_APPS_FILE: /run/secrets/member-apps.json
       LIVEKIT_URL: ${LIVEKIT_URL:-https://livekit.echimine.fr}
-      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:?}
-      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:?}
+      # ADMIN_TOKEN, LIVEKIT_API_KEY et LIVEKIT_API_SECRET restent dans le .env du VPS ; branchés par les tickets qui les utilisent.
     volumes:
       - ./member-apps.json:/run/secrets/member-apps.json:ro
       - images:/data/images

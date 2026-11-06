@@ -11,6 +11,13 @@
       "and": [
         {
           "match": {
+            "type": "regex",
+            "regex": "^[0-9a-f]{64}$",
+            "parameter": { "source": "header", "name": "X-Deploy-Token" }
+          }
+        },
+        {
+          "match": {
             "type": "value",
             "value": "{{ getenv `DEPLOY_TOKEN_LIVE` }}",
             "parameter": { "source": "header", "name": "X-Deploy-Token" }

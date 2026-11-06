@@ -11,7 +11,7 @@ Le jeton est un JWT HS256 valable 5 min, signé avec le secret de votre App memb
 | --------- | --------------------------------------------------------- |
 | `iss`     | identifiant de votre App membre (`tiktok`, `strava`…)     |
 | `sub`     | identifiant de l'utilisateur dans votre app               |
-| `name`    | pseudo, 1 à 30 caractères (sinon le jeton est refusé)     |
+| `name`    | pseudo, 1 à 30 caractères visibles (sinon jeton refusé)   |
 | `picture` | avatar en `https://`, facultatif (sinon ignoré)           |
 | `exp`     | expiration                                                |
 
@@ -23,6 +23,5 @@ LIVE_APP_ID=demo-ios LIVE_TOKEN_SECRET=… npm start
 curl -X POST http://localhost:4000/live/participant-token
 ```
 
-Remplacez `currentUser` par l'authentification de votre app. Les valeurs par
-défaut sont celles de l'App membre de test `demo-ios` de
-`server/member-apps.example.json`.
+Remplacez `currentUser` par l'authentification de votre app.
+Sans `LIVE_TOKEN_SECRET`, le serveur refuse de démarrer (secret de test : `demo-ios` de `server/member-apps.example.json`).
