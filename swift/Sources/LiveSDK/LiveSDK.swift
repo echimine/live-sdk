@@ -50,6 +50,7 @@ public final class LiveSDK {
         let session = LiveSession(
             id: id,
             url: Self.webSocketURL(serverURL: connection.serverURL, liveId: id),
+            config: config,
             tokenProvider: connection.tokenProvider,
             environment: environment
         )
