@@ -1,0 +1,42 @@
+<!doctype html>
+<!-- PROTOTYPE JETABLE — « À quoi ressemblent les écrans prêts à l'emploi ? » (#10).
+     Trois variantes des écrans du SDK (liste, lancement, Live côté Spectateur et côté Hôte), switchables via ?variant=A|B|C.
+     Ouvrir ce fichier dans un navigateur, rien à installer. À ne pas fusionner dans main. -->
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Prototype écrans Live</title>
+<link rel="stylesheet" href="proto.css">
+</head>
+<body>
+<aside class="panel">
+  <h2>Écran</h2>
+  <div class="seg">
+    <button data-ctl="screen" data-v="liste">Liste des Lives</button>
+    <button data-ctl="screen" data-v="lancer">Lancer</button>
+    <button data-ctl="screen" data-v="regarder">Live</button>
+  </div>
+  <h2>Rôle dans le Live</h2>
+  <div class="seg">
+    <button data-ctl="role" data-v="spectateur">Spectateur</button>
+    <button data-ctl="role" data-v="hote">Hôte (Animateur)</button>
+  </div>
+  <h2>App membre (thème)</h2>
+  <select id="app">
+    <option value="tiktok">TikTok_Clone</option><option value="twitch">twitch</option><option value="insta">clone_instagram</option>
+    <option value="snap">snapcore</option><option value="strava">clone-strava</option>
+  </select>
+  <h2>Jetons de thème exposés par le SDK</h2>
+  <label>Couleur d'accent <input type="color" id="accent"></label>
+  <label>Arrondi <input type="range" id="radius" min="0" max="24"></label>
+  <label>Police <select id="font"><option value="system-ui">Système</option><option value="Inter, system-ui">Inter</option><option value='"Avenir Next", system-ui'>Avenir Next</option><option value='"Helvetica Neue", system-ui'>Helvetica Neue</option><option value="Georgia, serif">Georgia</option></select></label>
+  <label>Libellé du Live <input type="text" id="label"></label>
+  <p class="note">À essayer : côté Hôte, touchez un message pour modérer, ouvrez ⚙️ Gestion pour accepter la Demande de montée de Yanis. Côté Spectateur, « Acheter » puis confirmez. Clic droit sur ❤️ pour choisir une autre Réaction. Flèches ← → pour changer de variante.</p>
+</aside>
+<div id="phone" class="phone"></div>
+<section class="panel"><h2>État</h2><pre id="state"></pre></section>
+<div id="switcher"><button id="prev">←</button><span id="switch-label"></span><button id="next">→</button></div>
+<script src="proto.js"></script>
+</body>
+</html>
