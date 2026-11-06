@@ -135,6 +135,49 @@ class ProductTest {
         client.close()
     }
 
+    /** Config commune dont les images sont bornées à [maxBytes] octets et aux [formats] donnés. */
+    private fun imagesConfig(maxBytes: Long, formats: List<String>): String =
+        """{"reactions":["❤️","😂","😮","👏"],"chat":{"maxLength":300},"images":{"maxBytes":$maxBytes,"formats":[${formats.joinToString { "\"$it\"" }}]},"product":{"nameMaxLength":80}}"""
+
+    @Test
+    fun unePhotoAuDelaDeLaConfigEstRefuseeSansAppelReseau() = runTest {
+        transport.http = { request ->
+            if (request.url.endsWith("/v1/config")) HttpResponse(200, emptyMap(), imagesConfig(maxBytes = 1, formats = listOf("image/jpeg")))
+            else HttpResponse(201, emptyMap(), fixture("http/images.upload.response.json"))
+        }
+        val client = configure()
+        val live = connectedLive(client)
+        assertEquals(1L, client.config.value.imagesMaxBytes)
+
+        val tooLarge = async { live.pinProduct("Baskets", 8999, "EUR", ProductImage.Data(byteArrayOf(1))) }
+        runCurrent()
+
+        assertEquals(LiveErrorCode.PayloadTooLarge, (tooLarge.await() as LiveResult.Failure).error.code)
+        assertEquals(1, reductions.size) // l'image est bien réduite d'abord (2 octets, au-delà de 1)
+        assertEquals(0, transport.requests.count { it.url.endsWith("/v1/images") })
+        assertTrue(transport.socket.sent.none { it["type"]!!.jsonPrimitive.content == "pinProduct" })
+        client.close()
+    }
+
+    @Test
+    fun unFormatHorsDeLaConfigEstRefuseSansAppelReseau() = runTest {
+        transport.http = { request ->
+            if (request.url.endsWith("/v1/config")) HttpResponse(200, emptyMap(), imagesConfig(maxBytes = 10_485_760, formats = listOf("image/png")))
+            else HttpResponse(201, emptyMap(), fixture("http/images.upload.response.json"))
+        }
+        val client = configure()
+        val live = connectedLive(client)
+        assertEquals(listOf("image/png"), client.config.value.imageFormats)
+
+        val unsupported = async { live.pinProduct("Baskets", 8999, "EUR", ProductImage.Data(byteArrayOf(1))) }
+        runCurrent()
+
+        assertEquals(LiveErrorCode.UnsupportedMediaType, (unsupported.await() as LiveResult.Failure).error.code)
+        assertEquals(0, transport.requests.count { it.url.endsWith("/v1/images") })
+        assertTrue(transport.socket.sent.none { it["type"]!!.jsonPrimitive.content == "pinProduct" })
+        client.close()
+    }
+
     @Test
     fun unProduitInvalideEstRefuseSansRienEnvoyer() = runTest {
         val client = configure()

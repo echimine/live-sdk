@@ -1,5 +1,7 @@
-import { and, asc, eq, isNull, sql } from "drizzle-orm";
+import { and, asc, eq, isNotNull, isNull, sql } from "drizzle-orm";
+import type { PgColumn } from "drizzle-orm/pg-core";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
+import { participantColumns, toParticipant } from "./db/participant.js";
 import { postgresCode } from "./db/postgres-error.js";
 import { liveCohosts, lives } from "./db/schema.js";
 import { opaqueId } from "./ids.js";
@@ -12,6 +14,8 @@ export interface Live {
   startedAt: Date;
   /** Total des Réactions au dernier enregistrement. */
   reactionsTotal: number;
+  /** Audience maximale au dernier enregistrement. */
+  peakAudience: number;
 }
 
 export type EndReason = "endedByHost" | "hostTimeout";
@@ -22,14 +26,10 @@ function toLive(row: Row): Live {
   return {
     id: row.id,
     ...(row.title !== null && { title: row.title }),
-    host: {
-      id: row.hostId,
-      app: row.hostApp,
-      name: row.hostName,
-      ...(row.hostPicture !== null && { picture: row.hostPicture }),
-    },
+    host: toParticipant(row, "host"),
     startedAt: row.startedAt,
     reactionsTotal: row.reactionsTotal,
+    peakAudience: row.peakAudience,
   };
 }
 
@@ -57,6 +57,12 @@ export class LiveStore {
     return rows.map(toLive);
   }
 
+  /** Un Live terminé, avec ses totaux de fin ; `undefined` s'il est inconnu ou encore en cours. */
+  async findEnded(id: string): Promise<Live | undefined> {
+    const [row] = await this.db.select().from(lives).where(and(eq(lives.id, id), isNotNull(lives.endedAt)));
+    return row && toLive(row);
+  }
+
   /**
    * Enregistre un Live. Rend `undefined` si l'Hôte a déjà un Live en cours
    * (lancement concurrent) : l'index unique partiel en est le garant.
@@ -66,10 +72,7 @@ export class LiveStore {
       await this.db.insert(lives).values({
         id: live.id,
         title: live.title ?? null,
-        hostId: live.host.id,
-        hostApp: live.host.app,
-        hostName: live.host.name,
-        hostPicture: live.host.picture ?? null,
+        ...participantColumns(live.host, "host"),
         startedAt: live.startedAt,
       });
       return live;
@@ -87,25 +90,13 @@ export class LiveStore {
       .from(liveCohosts)
       .where(eq(liveCohosts.liveId, liveId))
       .orderBy(asc(liveCohosts.seq));
-    return rows.map((row) => ({
-      id: row.participantId,
-      app: row.participantApp,
-      name: row.participantName,
-      ...(row.participantPicture !== null && { picture: row.participantPicture }),
-    }));
+    return rows.map((row) => toParticipant(row, "participant"));
   }
 
   async addCohost(liveId: string, cohost: Participant, at: Date): Promise<void> {
     await this.db
       .insert(liveCohosts)
-      .values({
-        liveId,
-        participantId: cohost.id,
-        participantApp: cohost.app,
-        participantName: cohost.name,
-        participantPicture: cohost.picture ?? null,
-        promotedAt: at,
-      })
+      .values({ liveId, ...participantColumns(cohost, "participant"), promotedAt: at })
       .onConflictDoNothing();
   }
 
@@ -115,11 +106,16 @@ export class LiveStore {
       .where(and(eq(liveCohosts.liveId, liveId), eq(liveCohosts.participantId, participantId)));
   }
 
-  /** Termine un Live, avec son total final de Réactions. */
-  async end(id: string, reason: EndReason, at: Date, reactionsTotal: number): Promise<void> {
+  /** Termine un Live, avec son total final de Réactions et son Audience maximale. */
+  async end(id: string, reason: EndReason, at: Date, reactionsTotal: number, peakAudience: number): Promise<void> {
     await this.db
       .update(lives)
-      .set({ endedAt: at, endReason: reason, reactionsTotal: greatestReactionsTotal(reactionsTotal) })
+      .set({
+        endedAt: at,
+        endReason: reason,
+        reactionsTotal: greatest(lives.reactionsTotal, reactionsTotal),
+        peakAudience: greatest(lives.peakAudience, peakAudience),
+      })
       .where(and(eq(lives.id, id), isNull(lives.endedAt)));
   }
 
@@ -127,12 +123,20 @@ export class LiveStore {
   async saveReactionsTotal(id: string, reactionsTotal: number): Promise<void> {
     await this.db
       .update(lives)
-      .set({ reactionsTotal: greatestReactionsTotal(reactionsTotal) })
+      .set({ reactionsTotal: greatest(lives.reactionsTotal, reactionsTotal) })
+      .where(eq(lives.id, id));
+  }
+
+  /** Enregistre l'Audience maximale d'un Live ; une valeur plus ancienne n'écrase jamais une plus grande. */
+  async savePeakAudience(id: string, peakAudience: number): Promise<void> {
+    await this.db
+      .update(lives)
+      .set({ peakAudience: greatest(lives.peakAudience, peakAudience) })
       .where(eq(lives.id, id));
   }
 }
 
-/** Le total ne fait que croître : des écritures qui se croisent gardent le plus grand. */
-function greatestReactionsTotal(total: number) {
-  return sql`greatest(${lives.reactionsTotal}, ${total})`;
+/** Un compteur qui ne fait que croître : des écritures qui se croisent gardent le plus grand. */
+function greatest(column: PgColumn, value: number) {
+  return sql`greatest(${column}, ${value})`;
 }

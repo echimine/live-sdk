@@ -50,8 +50,11 @@ describe("lancer un Live", () => {
     expect(live.livekit.openRooms).toEqual([first.id]);
   });
 
-  it("refuse un titre de plus de 80 caractères visibles, sans créer de room", async () => {
-    const response = await launch(await participantToken(), { title: "a".repeat(81) });
+  it.each([
+    ["de plus de 80 caractères visibles", "a".repeat(81)],
+    ["fait uniquement d'espaces de largeur nulle (U+200B)", "​".repeat(3)],
+  ])("refuse un titre %s, sans créer de room", async (_label, title) => {
+    const response = await launch(await participantToken(), { title });
 
     expect(response.statusCode).toBe(400);
     expect(HttpError.parse(response.json()).error.code).toBe("invalid_request");

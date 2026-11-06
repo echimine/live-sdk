@@ -1,0 +1,6 @@
+{
+  "error": {
+    "code": "unsupported_media_type",
+    "message": "Formats acceptés : image/jpeg, image/png, image/webp."
+  }
+}

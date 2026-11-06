@@ -100,7 +100,10 @@ public struct LiveRecap: Sendable, Hashable, Codable {
     }
 }
 
+/// Codes d'erreur fermés : ceux du serveur commun (WebSocket et HTTP), plus ceux du SDK lui-même.
+/// Mêmes noms que le cœur Kotlin (`LiveErrorCode`).
 public enum LiveErrorCode: String, Sendable, Codable {
+    // Serveur commun.
     case invalidToken = "invalid_token"
     case liveNotFound = "live_not_found"
     case banned
@@ -114,11 +117,38 @@ public enum LiveErrorCode: String, Sendable, Codable {
     case invalidCommand = "invalid_command"
     case unknownCommand = "unknown_command"
     case notFound = "not_found"
+    case invalidRequest = "invalid_request"
+    /// Corps trop volumineux (HTTP 413) : photo du produit au-delà de `LiveConfig.images.maxBytes`.
+    case payloadTooLarge = "payload_too_large"
+    /// Format refusé (HTTP 415) : photo du produit hors de `LiveConfig.images.formats`.
+    case unsupportedMediaType = "unsupported_media_type"
+
+    // SDK.
+    /// Le Live n'est pas connecté (connexion en cours, reconnexion ou Live quitté).
     case disconnected
+    /// Serveur injoignable ou réponse illisible.
+    case network
+    /// Photo du produit illisible.
+    case invalidImage
+    /// Le `tokenProvider` de l'App membre a échoué.
+    case tokenUnavailable
+    /// Code ou réponse que cette version du SDK ne connaît pas.
     case unknown
+
+    /// Codes propres au SDK : jamais émis par le serveur, donc jamais décodés.
+    private static let sdkOnly: Set<LiveErrorCode> = [.disconnected, .network, .invalidImage, .tokenUnavailable, .unknown]
 
     public init(from decoder: Decoder) throws {
         let raw = try decoder.singleValueContainer().decode(String.self)
-        self = LiveErrorCode(rawValue: raw) ?? .unknown
+        let code = LiveErrorCode(rawValue: raw) ?? .unknown
+        self = Self.sdkOnly.contains(code) ? .unknown : code
     }
+}
+
+/// Ce qu'un Animateur peut faire sur un message du chat (voir `LiveSession.moderationActions(for:)`).
+public enum ModerationAction: Sendable, Hashable {
+    case deleteMessage
+    case shadowban
+    case unshadowban
+    case ban
 }

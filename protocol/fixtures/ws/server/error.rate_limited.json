@@ -2,6 +2,6 @@
   "type": "error",
   "ref": "c8",
   "code": "rate_limited",
-  "message": "Doucement…",
+  "message": "Doucement… (5 messages par 10 s)",
   "retryAfterMs": 4200
 }

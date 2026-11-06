@@ -1,0 +1,5 @@
+{
+  "type": "error",
+  "code": "live_not_found",
+  "message": "Ce Live n'existe pas ou est terminé."
+}

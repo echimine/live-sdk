@@ -46,3 +46,9 @@ Le simulateur n'a pas de caméra : l'Hôte doit être un vrai iPhone (ou l'app d
 2. Téléphone B (ou simulateur) : pseudo « Spectateur », le Live apparaît dans la liste (titre, Hôte, `demo-ios`, Audience) ; le toucher.
 3. B voit la vidéo de A en plein écran, sous la seconde ; ✕ ramène à la liste.
 4. Sur B, coller l'identifiant du Live (ou un lien `…/lives/<id>`) dans le champ de lien direct ouvre le même Live.
+
+5. Hôte : 🛍, rechercher « mug » dans la source factice, sélectionner le résultat puis **Épingler le produit**. Vérifier le préremplissage et la pastille sur les deux appareils.
+6. Tester aussi la saisie manuelle et une photo de la photothèque ou de la caméra ; vérifier la requête JPEG `POST /v1/images` et une image de 1 024 px maximum.
+7. Spectateur : ouvrir la pastille, **Confirmer l’achat** ; vérifier l’annonce dans le chat et le toast sur les deux appareils. Changer le produit côté Hôte pendant que la fiche est ouverte : la confirmation doit expliquer que le produit a changé.
+8. Retirer le produit ; vérifier la disparition de la pastille. Passer le téléphone en locale française puis américaine pour vérifier le prix.
+9. Pour vérifier le repli, faire lever une erreur dans `DemoProductSource` : « Catalogue indisponible », « Réessayer » et le formulaire manuel doivent rester accessibles.

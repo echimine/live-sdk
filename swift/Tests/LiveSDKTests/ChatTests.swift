@@ -60,8 +60,11 @@ struct ChatTests {
             try await sending.value
         }
         #expect(session.chatLocked)
+        #expect(session.chatLockRemaining == .milliseconds(4000))
+        #expect(session.chatUnlockAt == harness.clock.now.addingTimeInterval(4))
 
         harness.clock.advance(by: 1)
+        #expect(session.chatLockRemaining == .milliseconds(3000))
         await #expect(throws: LiveCommandError(code: .rateLimited, message: "Doucement…", retryAfter: .milliseconds(3000))) {
             try await session.sendMessage("encore")
         }
@@ -69,5 +72,18 @@ struct ChatTests {
 
         harness.clock.advance(by: 3)
         #expect(await eventually { !session.chatLocked })
+        #expect(session.chatLockRemaining == nil)
+        #expect(session.chatUnlockAt == nil)
+    }
+
+    @Test func unMessageRecuDeuxFoisNApparaitQuUneFois() async throws {
+        let (session, connection) = try await LiveSessionTests.joined(fixture: "ws/server/snapshot.minimal.json")
+
+        try connection.push(fixture: "ws/server/chatMessage.json")
+        try connection.push(fixture: "ws/server/chatMessage.json")
+        try connection.push(fixture: "ws/server/hostDisconnected.json")
+
+        #expect(await eventually { !session.hostConnected })
+        #expect(session.messages.map(\.id) == ["msg_0193"])
     }
 }

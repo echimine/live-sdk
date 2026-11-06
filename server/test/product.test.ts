@@ -93,7 +93,9 @@ describe("Produit épinglé et Achat", () => {
 
     it.each([
       ["nom vide", { name: "" }],
+      ["nom fait d'espaces et de caractères invisibles", { name: " ​⁠ " }],
       ["nom de plus de 80 caractères", { name: "x".repeat(81) }],
+      ["nom de 81 graphèmes composés", { name: "👨‍👩‍👧".repeat(81) }],
       ["prix négatif", { price: -1 }],
       ["prix au-delà de 1 000 000 centimes", { price: 1_000_001 }],
       ["prix non entier", { price: 89.99 }],
@@ -118,6 +120,15 @@ describe("Produit épinglé et Achat", () => {
       const product = await pin(host.socket, viewer.socket, { ...baskets, name: "x".repeat(80), price: 1_000_000 });
 
       expect(product).toMatchObject({ name: "x".repeat(80), price: 1_000_000 });
+    });
+
+    it("un nom de 80 graphèmes faits d'emojis composés est accepté, et les espaces autour sont coupés", async () => {
+      const { host, viewer } = await liveWithViewer();
+      const name = "👨‍👩‍👧".repeat(80);
+
+      const product = await pin(host.socket, viewer.socket, { ...baskets, name: `  ${name}  ` });
+
+      expect(product).toMatchObject({ name });
     });
   });
 

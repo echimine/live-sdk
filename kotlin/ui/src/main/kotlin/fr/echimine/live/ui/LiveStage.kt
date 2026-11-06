@@ -7,7 +7,6 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -16,20 +15,15 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
@@ -51,7 +45,6 @@ import androidx.core.content.ContextCompat
 import fr.echimine.live.core.Live
 import fr.echimine.live.core.LiveDetails
 import fr.echimine.live.core.LiveResult
-import fr.echimine.live.core.MAX_COHOSTS
 import fr.echimine.live.core.Participant
 import fr.echimine.live.core.Role
 import io.livekit.android.room.Room
@@ -128,29 +121,6 @@ private fun StageTile(room: Room, participant: Participant, isYou: Boolean, labe
 
 // ---------------------------------------------------------------- dock
 
-/** Bouton du dock avec un compteur en pastille (masqué à 0). */
-@Composable
-internal fun BadgedDockButton(symbol: String, description: String, count: Int, onClick: () -> Unit) {
-    Box {
-        DockButton(symbol, description, Modifier.clickable(onClick = onClick))
-        if (count > 0) {
-            Text(
-                if (count > 9) "9+" else count.toString(),
-                color = MaterialTheme.colorScheme.onPrimary,
-                fontSize = 11.sp,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .offset(x = 4.dp, y = (-4).dp)
-                    .widthIn(min = 18.dp)
-                    .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.primary)
-                    .padding(horizontal = 5.dp, vertical = 1.dp),
-            )
-        }
-    }
-}
-
 /** Où en est un Spectateur ou un Co-hôte vis-à-vis de l'écran. */
 internal enum class StagePosition { Viewer, Requested, Cohost }
 
@@ -197,7 +167,7 @@ internal class CommandRunner(private val scope: CoroutineScope) {
         scope.launch {
             when (val result = action()) {
                 is LiveResult.Success -> onSuccess()
-                is LiveResult.Failure -> error = "$failure : ${result.error.message}"
+                is LiveResult.Failure -> error = "$failure : ${result.error.displayMessage()}"
             }
             pending = pending - key
         }
@@ -288,97 +258,3 @@ private val PUBLISH_PERMISSIONS = arrayOf(Manifest.permission.CAMERA, Manifest.p
 
 private fun Context.canPublish(): Boolean = PUBLISH_PERMISSIONS
     .all { ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED }
-
-// ---------------------------------------------------------------- ⚙️ Gestion
-
-/**
- * ⚙️ Gestion, pour les Animateurs : Demandes de montée à accepter ou refuser et Co-hôtes à retirer
- * (actions de l'Hôte seul), avec la limite de [MAX_COHOSTS] Co-hôtes.
- */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-internal fun ManagementSheet(live: Live, details: LiveDetails, onDismiss: () -> Unit) {
-    val commands = rememberCommandRunner()
-    val hosting = details.role == Role.Host
-    val full = details.cohosts.size >= MAX_COHOSTS
-
-    fun send(participantId: String, failure: String, action: suspend (String) -> LiveResult<Unit>) =
-        commands.run(failure, key = participantId) { action(participantId) }
-
-    ModalBottomSheet(onDismissRequest = onDismiss) {
-        Column(
-            Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).padding(bottom = 24.dp),
-        ) {
-            Text("Gestion", style = MaterialTheme.typography.titleMedium)
-            if (hosting) {
-                Spacer(Modifier.height(16.dp))
-                SectionTitle("Demandes de montée")
-                if (details.joinRequests.isEmpty()) {
-                    Hint("Aucune demande en attente.")
-                }
-                details.joinRequests.forEach { participant ->
-                    val pending = participant.id in commands.pending
-                    ParticipantRow(participant) {
-                        TextButton(
-                            enabled = !pending,
-                            onClick = { send(participant.id, "Refus impossible", live::declineJoin) },
-                        ) { Text("Refuser") }
-                        Button(
-                            enabled = !pending && !full,
-                            onClick = { send(participant.id, "Acceptation impossible", live::acceptJoin) },
-                        ) { Text("Accepter") }
-                    }
-                }
-                if (full && details.joinRequests.isNotEmpty()) {
-                    Hint("$MAX_COHOSTS Co-hôtes au plus : retirez-en un pour accepter une demande.")
-                }
-            }
-            Spacer(Modifier.height(16.dp))
-            SectionTitle("Co-hôtes · ${details.cohosts.size}/$MAX_COHOSTS")
-            if (details.cohosts.isEmpty()) {
-                Hint("Aucun Co-hôte à l'écran.")
-            }
-            details.cohosts.forEach { cohost ->
-                ParticipantRow(cohost, you = cohost.id == details.you.id) {
-                    if (hosting) {
-                        TextButton(
-                            enabled = cohost.id !in commands.pending,
-                            onClick = { send(cohost.id, "Retrait impossible", live::removeCohost) },
-                        ) { Text("Retirer") }
-                    }
-                }
-            }
-            ErrorLine(commands.error)
-        }
-    }
-}
-
-@Composable
-private fun SectionTitle(text: String) {
-    Text(text, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(bottom = 4.dp))
-}
-
-@Composable
-private fun Hint(text: String) {
-    Text(text, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 14.sp, modifier = Modifier.padding(vertical = 4.dp))
-}
-
-/** Avatar, « pseudo · App d'origine », puis les actions. */
-@Composable
-private fun ParticipantRow(participant: Participant, you: Boolean = false, actions: @Composable () -> Unit) {
-    Row(
-        Modifier.fillMaxWidth().padding(vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
-    ) {
-        Avatar(participant, size = 36.dp)
-        Spacer(Modifier.width(8.dp))
-        Text(
-            if (you) "${participantLine(participant)} (vous)" else participantLine(participant),
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f),
-        )
-        actions()
-    }
-}

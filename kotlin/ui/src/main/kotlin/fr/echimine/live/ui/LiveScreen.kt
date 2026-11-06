@@ -20,7 +20,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -37,8 +36,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -47,11 +44,11 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import fr.echimine.live.core.Live
 import fr.echimine.live.core.LiveClient
+import fr.echimine.live.core.LiveErrorCode
 import fr.echimine.live.core.LiveEvent
 import fr.echimine.live.core.LiveSdk
 import fr.echimine.live.core.LiveState
 import fr.echimine.live.core.LiveState.Connection
-import fr.echimine.live.core.Participant
 
 /**
  * Ouvre le Live [liveId] et l'affiche en plein écran ; le quitte quand l'écran disparaît.
@@ -108,6 +105,8 @@ public fun LiveScreen(
     var pinOpen by rememberSaveable(live.id) { mutableStateOf(false) }
     var stageOpen by rememberSaveable(live.id) { mutableStateOf(false) }
     var managementOpen by rememberSaveable(live.id) { mutableStateOf(false) }
+    /** Message touché par un Animateur ; ses actions se ferment s'il est supprimé entre-temps. */
+    var moderatedMessageId by rememberSaveable(live.id) { mutableStateOf<String?>(null) }
     val toasts = remember(live) { live.events.toasts() }
     val animator = details?.role?.isAnimator == true
     // L'Hôte termine son Live en le quittant ; les autres le quittent simplement.
@@ -173,18 +172,25 @@ public fun LiveScreen(
                         }
                         // ⚙️ Gestion : le badge compte les Demandes de montée en attente (reçues par l'Hôte seul).
                         if (animator) {
-                            BadgedDockButton(
-                                "⚙️",
-                                description = "Gestion",
-                                count = details.joinRequests.size,
-                                onClick = { managementOpen = true },
-                            )
+                            ManagementDockButton(details.joinRequests.size, onClick = { managementOpen = true })
                         }
                     }
                 }
             }
             if (chatOpen && interactive) {
-                ChatSheet(live, config, details.messages, state.chatLocked, onDismiss = { chatOpen = false })
+                ChatSheet(
+                    live,
+                    config,
+                    details.messages,
+                    locked = state.chatLocked,
+                    unlockAt = state.chatUnlockAt,
+                    onDismiss = { chatOpen = false },
+                    onMessageTap = if (animator) { message -> moderatedMessageId = message.id } else null,
+                )
+            }
+            val moderated = details?.messages?.firstOrNull { it.id == moderatedMessageId }
+            if (moderated != null && interactive && animator) {
+                MessageActionsSheet(live, details, moderated, onDismiss = { moderatedMessageId = null })
             }
             if (reactionsOpen && interactive) {
                 ReactionSheet(config.reactions, onReact = live::react, onDismiss = { reactionsOpen = false })
@@ -202,7 +208,19 @@ public fun LiveScreen(
                 StageSheet(live, details, onDismiss = { stageOpen = false })
             }
             if (managementOpen && interactive && animator) {
-                ManagementSheet(live, details, onDismiss = { managementOpen = false })
+                ManagementSheet(
+                    live,
+                    details,
+                    onPinProduct = {
+                        managementOpen = false
+                        pinOpen = true
+                    },
+                    onEndLive = {
+                        managementOpen = false
+                        endOpen = true
+                    },
+                    onDismiss = { managementOpen = false },
+                )
             }
             if (endOpen && interactive) {
                 EndLiveDialog(live, onDismiss = { endOpen = false })
@@ -266,24 +284,13 @@ private fun TopBar(state: LiveState, hosting: Boolean, onClose: () -> Unit, onOp
         )
         if (details != null) {
             Spacer(Modifier.width(10.dp))
-            Avatar(details.host, size = 30.dp)
-            Spacer(Modifier.width(8.dp))
-            Column(Modifier.weight(1f)) {
-                Text(
-                    details.title ?: details.host.name,
-                    color = Color.White,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    participantLine(details.host),
-                    color = Color.White.copy(alpha = 0.75f),
-                    fontSize = 12.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
+            ParticipantLine(
+                details.host,
+                modifier = Modifier.weight(1f),
+                avatarSize = 30.dp,
+                headline = details.title ?: details.host.name,
+                onVideo = true,
+            )
             Spacer(Modifier.width(8.dp))
             AudienceChip(details.audience, onClick = onOpenAudience)
             Spacer(Modifier.width(8.dp))
@@ -318,8 +325,11 @@ private fun StatusOverlay(state: LiveState, hasVideo: Boolean, onClose: () -> Un
             else -> "Le Live est terminé."
         }
         Connection.Replaced -> "Ce Live est ouvert sur un autre appareil."
-        Connection.Banned -> "Vous avez été banni de ce Live."
-        is Connection.Failed -> "Impossible d'ouvrir ce Live : ${connection.error.message}"
+        Connection.Banned -> BANNED
+        // Banni plus tôt : le `join` est refusé, avec le même message (les autres Lives restent ouverts).
+        is Connection.Failed ->
+            if (connection.error.code == LiveErrorCode.Banned) BANNED
+            else "Impossible d'ouvrir ce Live : ${connection.error.displayMessage()}"
         Connection.Closed -> null
     } ?: return
     val final = state.connection.isFinal
@@ -343,23 +353,13 @@ private fun StatusOverlay(state: LiveState, hasVideo: Boolean, onClose: () -> Un
     }
 }
 
-/** Bouton ✕ rond, sur fond vidéo. */
+private const val BANNED = "Vous avez été banni de ce Live."
+
+/** Bouton ✕ : le même bouton rond que le dock, sur fond vidéo. */
 @Composable
 internal fun CloseButton(description: String, onClick: () -> Unit) {
-    IconButton(
-        onClick = onClick,
-        modifier = Modifier
-            .size(40.dp)
-            .clip(CircleShape)
-            .background(Color.Black.copy(alpha = 0.35f))
-            .semantics { contentDescription = description },
-    ) {
-        Text("✕", color = Color.White, fontSize = 18.sp)
-    }
+    DockButton("✕", description, Modifier.clickable(onClickLabel = description, onClick = onClick))
 }
-
-/** « pseudo · App d'origine ». */
-internal fun participantLine(participant: Participant): String = "${participant.name} · ${participant.app}"
 
 @Composable
 internal fun Loading() {

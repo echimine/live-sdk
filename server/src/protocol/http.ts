@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { HttpsUrl, LiveTitle, Participant, Timestamp } from "./common.js";
+import { EndSummary, HttpsUrl, LiveTitle, Participant, Timestamp } from "./common.js";
 
 /** Un Live en cours, tel que listé par `GET /v1/lives`. */
 export const LiveSummary = z.object({
@@ -26,6 +26,13 @@ export const LivesCreateResponse = z.object({
   live: LiveSummary,
 });
 
+/**
+ * `GET /v1/lives/{id}/summary` : récapitulatif d'un Live terminé, pour son Hôte
+ * seul (`404 not_found` sinon) ; le même que celui de `liveEnded`, pour l'Hôte
+ * absent quand son Live s'est terminé par Délai de grâce.
+ */
+export const LivesSummaryResponse = EndSummary;
+
 /** `POST /v1/images` : URL de l'image enregistrée, à passer à `pinProduct`. */
 export const ImagesUploadResponse = z.object({
   url: HttpsUrl,
@@ -51,11 +58,14 @@ export const HttpError = z.object({
   }),
 });
 
-/** Messages HTTP, indexés par le nom de leur fixture dans `protocol/fixtures/http/`. */
+/**
+ * Messages HTTP, indexés par le nom de leur fixture dans `protocol/fixtures/http/` ;
+ * les fixtures `error.<code>.json` sont des `HttpError`, un par code.
+ */
 export const httpMessages = {
   "lives.list.response": LivesListResponse,
   "lives.create.request": LivesCreateRequest,
   "lives.create.response": LivesCreateResponse,
+  "lives.summary.response": LivesSummaryResponse,
   "images.upload.response": ImagesUploadResponse,
-  error: HttpError,
 } as const;

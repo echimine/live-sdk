@@ -1,5 +1,6 @@
 import { and, count, eq, isNull } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
+import { participantColumns } from "./db/participant.js";
 import { chatMessages, products, purchases } from "./db/schema.js";
 import { opaqueId } from "./ids.js";
 import type { ChatMessage, Product } from "./protocol/index.js";
@@ -76,20 +77,14 @@ export class ProductStore {
         id: message.id,
         liveId,
         productId: product.id,
-        buyerId: author.id,
-        buyerApp: author.app,
-        buyerName: author.name,
-        buyerPicture: author.picture ?? null,
+        ...participantColumns(author, "buyer"),
         buyerRole: role,
         purchasedAt: at,
       });
       await tx.insert(chatMessages).values({
         id: message.id,
         liveId,
-        authorId: author.id,
-        authorApp: author.app,
-        authorName: author.name,
-        authorPicture: author.picture ?? null,
+        ...participantColumns(author, "author"),
         authorRole: role,
         kind: "purchase",
         productId: product.id,

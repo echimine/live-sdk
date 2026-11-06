@@ -35,6 +35,18 @@ private enum Screen: Identifiable {
     }
 }
 
+/// Thème et Source de produits de l'app, appliqués aux écrans de la liste comme à ceux en plein écran
+/// (un `fullScreenCover` ne reçoit pas l'environnement de la vue qui le présente).
+private struct SampleStyle: ViewModifier {
+    static let theme = LiveTheme(label: "Crosslive")
+
+    func body(content: Content) -> some View {
+        content
+            .liveTheme(Self.theme)
+            .productSource(DemoProductSource())
+    }
+}
+
 private struct RootView: View {
     @AppStorage("pseudo") private var pseudo = ""
     @AppStorage("userId") private var userId = UUID().uuidString
@@ -49,7 +61,7 @@ private struct RootView: View {
                 PseudoForm(pseudo: $pseudo) { Task { await configure() } }
             }
         }
-        .liveTheme(LiveTheme(label: "Crosslive"))
+        .modifier(SampleStyle())
         .task {
             if !pseudo.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { await configure() }
         }
@@ -67,7 +79,7 @@ private struct RootView: View {
                     LiveScreen(liveId: id, onClose: { screen = nil })
                 }
             }
-            .liveTheme(LiveTheme(label: "Crosslive"))
+            .modifier(SampleStyle())
         }
     }
 
@@ -100,5 +112,15 @@ private struct PseudoForm: View {
                 .disabled(pseudo.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
         .padding(24)
+    }
+}
+
+private struct DemoProductSource: ProductSource {
+    func searchProducts(matching query: String) async throws -> [ProductSuggestion] {
+        try await Task.sleep(for: .milliseconds(100))
+        return [
+            ProductSuggestion(id: "shirt", name: "T-shirt Crosslive", priceCents: 1990, currency: "EUR"),
+            ProductSuggestion(id: "mug", name: "Mug Crosslive", priceCents: 1250, currency: "EUR")
+        ].filter { $0.name.localizedCaseInsensitiveContains(query) }
     }
 }

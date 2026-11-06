@@ -83,6 +83,20 @@ describe("Jeton de Participant", () => {
     expect((await listLives(bearer(token))).statusCode).toBe(200);
   });
 
+  it("refuse un jeton émis depuis plus de 5 min, même si son `exp` est à 10 ans", async () => {
+    const tenYears = 10 * 365 * 24 * 3600;
+    const token = await participantToken({ expiresIn: tenYears });
+    server = await startTestServer({}, () => new Date(now.getTime() + 301_000));
+
+    expectInvalidToken(await listLives(bearer(token)));
+  });
+
+  it("refuse un jeton sans `iat`", async () => {
+    const token = await participantToken({ issuedAt: false });
+
+    expectInvalidToken(await listLives(bearer(token)));
+  });
+
   it.each([
     ["vide", ""],
     ["de 129 caractères", "u".repeat(129)],

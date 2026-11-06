@@ -1,0 +1,6 @@
+{
+  "type": "error",
+  "ref": "c9",
+  "code": "invalid_message",
+  "message": "Message vide ou de plus de 300 caractères."
+}

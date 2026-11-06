@@ -119,7 +119,7 @@ internal fun EndLiveDialog(live: Live, onDismiss: () -> Unit) {
                             // La fin arrive ensuite dans `live.state` (`Connection.Ended`), avec le récapitulatif.
                             is LiveResult.Success -> onDismiss()
                             is LiveResult.Failure -> {
-                                error = "Le Live n'a pas pu être terminé : ${result.error.message}"
+                                error = "Le Live n'a pas pu être terminé : ${result.error.displayMessage()}"
                                 ending = false
                             }
                         }

@@ -1,0 +1,5 @@
+{
+  "type": "error",
+  "code": "invalid_token",
+  "message": "Jeton de Participant refusé."
+}

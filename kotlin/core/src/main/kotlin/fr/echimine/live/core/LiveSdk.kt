@@ -132,10 +132,24 @@ public class LiveClient internal constructor(
             .also { it.start() }
     }
 
-    /** Réduit une photo (1024 px au plus) puis l'envoie via `POST /v1/images` ; rend son URL. */
+    /**
+     * Réduit une photo (1024 px au plus) puis l'envoie via `POST /v1/images` ; rend son URL.
+     * Ce que le serveur commun refuserait d'après sa config (`images.formats`, `images.maxBytes`)
+     * est refusé ici, sans appel réseau.
+     */
     private suspend fun uploadProductImage(bytes: ByteArray): LiveResult<String> {
         val image = withContext(dispatcher) { imageReducer.reduce(bytes, MAX_IMAGE_SIDE) }
             ?: return failure(LiveErrorCode.InvalidImage, "Image illisible : JPEG, PNG ou WebP attendu.")
+        val config = config.value
+        if (image.contentType !in config.imageFormats) {
+            return failure(
+                LiveErrorCode.UnsupportedMediaType,
+                "Format ${image.contentType} refusé par le serveur commun : ${config.imageFormats.joinToString()} attendu.",
+            )
+        }
+        if (image.bytes.size > config.imagesMaxBytes) {
+            return failure(LiveErrorCode.PayloadTooLarge, "Image trop lourde : ${config.imagesMaxBytes} octets au plus.")
+        }
         return http("POST", "/v1/images", HttpBody.Binary(image.bytes, image.contentType), ImagesUploadResponse.serializer())
             .map { it.url }
     }

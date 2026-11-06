@@ -58,7 +58,7 @@ struct DiscoveryTests {
 
     @Test func uneErreurDuServeurRemonteAvecSonCode() async throws {
         let harness = Harness()
-        try harness.http.reply("GET", "/v1/lives", status: 429, fixture: "http/error.json")
+        try harness.http.reply("GET", "/v1/lives", status: 429, fixture: "http/error.rate_limited.json")
         let sdk = await harness.configuredSDK()
 
         await #expect(throws: LiveSDKError.server(code: "rate_limited", message: "Trop de requêtes, réessayez plus tard.")) {

@@ -37,7 +37,13 @@ public data class LiveState(
     val live: LiveDetails? = null,
     /** `true` après un `rate_limited` du chat, le temps indiqué par le serveur : afficher « Doucement… ». */
     val chatLocked: Boolean = false,
+    /** Fin du verrou du chat tant que [chatLocked] ; `-chatUnlockAt.elapsedNow()` est le temps restant. */
+    val chatUnlockAt: TimeMark? = null,
 ) {
+    /** Temps restant avant la réouverture du chat, jamais négatif ; `null` si le chat n'est pas verrouillé. */
+    public val chatLockRemaining: Duration?
+        get() = chatUnlockAt?.let { (-it.elapsedNow()).coerceAtLeast(Duration.ZERO) }
+
     public sealed interface Connection {
         /** Première connexion en cours. */
         public data object Connecting : Connection
@@ -266,14 +272,14 @@ public class Live internal constructor(
         if (chatUnlockAt?.let { -it.elapsedNow() > duration } == true) return@synchronized // un verrou plus long court déjà
         val unlockAt = timeSource.markNow() + duration
         chatUnlockAt = unlockAt
-        stateFlow.update { it.copy(chatLocked = true) }
+        stateFlow.update { it.copy(chatLocked = true, chatUnlockAt = unlockAt) }
         chatUnlockJob?.cancel()
         chatUnlockJob = scope.launch {
             delay(duration)
             synchronized(chatLock) {
-                if (chatUnlockAt !== unlockAt) return@launch
+                if (chatUnlockAt != unlockAt) return@launch
                 chatUnlockAt = null
-                stateFlow.update { it.copy(chatLocked = false) }
+                stateFlow.update { it.copy(chatLocked = false, chatUnlockAt = null) }
             }
         }
     }
@@ -474,7 +480,7 @@ public class Live internal constructor(
         stateFlow.update { it.copy(connection = connection) }
     }
 
-    /** Applique un événement incrémental à l'état exposé. */
+    /** Applique un événement incrémental à l'état exposé (réducteur dans `LiveReducer.kt`) et émet ce qui s'anime. */
     private fun apply(message: ServerMessage) {
         when (message) {
             is ServerMessage.Reactions -> withoutOwnReactions(message.counts)
@@ -491,59 +497,8 @@ public class Live internal constructor(
         }
     }
 
-    private fun LiveDetails.applying(message: ServerMessage): LiveDetails = when (message) {
-        ServerMessage.HostDisconnected -> copy(hostConnected = false)
-        ServerMessage.HostReconnected -> copy(hostConnected = true)
-        is ServerMessage.JoinRequested ->
-            if (joinRequests.any { it.id == message.participant.id }) this
-            else copy(joinRequests = joinRequests + message.participant)
-        is ServerMessage.JoinRequestCancelled -> copy(joinRequests = joinRequests.filterNot { it.id == message.participantId })
-        ServerMessage.JoinDeclined -> copy(requestedToJoin = false)
-        is ServerMessage.RoleChanged -> {
-            val participant = message.participant
-            val others = cohosts.filterNot { it.id == participant.id }
-            val isYou = participant.id == you.id
-            val newRole = if (isYou) message.role else role
-            copy(
-                role = newRole,
-                cohosts = if (message.role == Role.Cohost) others + participant else others,
-                joinRequests = joinRequests.filterNot { it.id == participant.id },
-                moderation = moderation.takeIf { newRole.isAnimator },
-                requestedToJoin = requestedToJoin && !isYou,
-            )
-        }
-        is ServerMessage.AudienceChanged -> copy(audience = Audience(message.total, message.byApp))
-        is ServerMessage.Reactions -> copy(reactionsTotal = message.total)
-        is ServerMessage.ChatMessageReceived ->
-            if (messages.any { it.id == message.message.id }) this
-            else copy(messages = (messages + message.message).takeLast(MAX_MESSAGES))
-        is ServerMessage.MessageDeleted -> copy(messages = messages.filterNot { it.id == message.messageId })
-        is ServerMessage.ProductPinned -> copy(pinnedProduct = message.product)
-        ServerMessage.ProductUnpinned -> copy(pinnedProduct = null)
-        is ServerMessage.ModerationChanged -> copy(moderation = Moderation(message.shadowbanned, message.banned))
-        else -> this
-    }
-
-    private fun ServerMessage.Snapshot.toDetails() = LiveDetails(
-        id = live.id,
-        title = live.title,
-        startedAt = live.startedAt,
-        you = you,
-        role = role,
-        host = host,
-        hostConnected = hostConnected,
-        cohosts = cohosts,
-        pinnedProduct = pinnedProduct,
-        audience = audience,
-        reactionsTotal = reactionsTotal,
-        messages = messages,
-        joinRequests = joinRequests.orEmpty(),
-        moderation = moderation?.let { Moderation(it.shadowbanned, it.banned) },
-    )
-
     private companion object {
         val COMMAND_TIMEOUT = 10.seconds
-        const val MAX_MESSAGES = 200
 
         /** Verrou du chat si un `rate_limited` arrive sans `retryAfterMs`. */
         const val DEFAULT_CHAT_LOCK_MS = 5_000L

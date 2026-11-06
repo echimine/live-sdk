@@ -1,0 +1,6 @@
+{
+  "type": "error",
+  "ref": "c3",
+  "code": "not_host",
+  "message": "Seul l'Hôte peut faire cela."
+}

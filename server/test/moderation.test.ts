@@ -35,6 +35,14 @@ describe("Modération", () => {
     expect(await harness.nextNotAudience(animator)).toMatchObject({ type: "moderationChanged" });
   }
 
+  /** L'Hôte accepte la Demande de montée en attente de ce Participant ; `roleChanged` chez `sockets`. */
+  async function promote(host: TestSocket, participantId: string, sockets: TestSocket[]) {
+    expect(await command(host, { type: "acceptJoin", participantId })).toEqual({ type: "ack", ref: "c" });
+    for (const socket of sockets) {
+      expect(await harness.nextNotAudience(socket)).toMatchObject({ type: "roleChanged", role: "cohost" });
+    }
+  }
+
   /** Live de Léa, avec Noa et Sam en Spectateurs. */
   async function liveWithViewers() {
     const created = await harness.launch(lea);
@@ -152,12 +160,35 @@ describe("Modération", () => {
       }
     });
 
-    it("un Participant inconnu du Live : `not_found`", async () => {
+    it("un Participant inconnu du Live : `not_found`, pour mettre comme pour lever", async () => {
       const { host } = await liveWithViewers();
 
-      expect(await command(host, { type: "shadowban", participantId: "demo-ios:fantome" })).toMatchObject({
-        code: "not_found",
+      for (const type of ["shadowban", "unshadowban"]) {
+        expect(await command(host, { type, participantId: "demo-ios:fantome" })).toMatchObject({
+          type: "error",
+          code: "not_found",
+        });
+      }
+    });
+
+    it("un Co-hôte ne peut ni mettre ni lever le Shadowban d'un autre Co-hôte : `not_animator`", async () => {
+      const { created, host, viewer, other } = await liveWithViewers();
+      for (const socket of [viewer, other]) {
+        await command(socket, { type: "requestToJoin" });
+        await harness.nextNotAudience(host);
+      }
+      await promote(host, noaOnWire.id, [host, viewer, other]);
+      await promote(host, "demo-ios:u_310", [host, viewer, other]);
+
+      expect(await command(viewer, { type: "shadowban", participantId: "demo-ios:u_310" })).toMatchObject({
+        type: "error",
+        code: "not_animator",
       });
+      expect(await command(viewer, { type: "unshadowban", participantId: "demo-ios:u_310" })).toMatchObject({
+        type: "error",
+        code: "not_animator",
+      });
+      expect((await harness.join(created.id, lea)).reply).toMatchObject({ moderation: { shadowbanned: [] } });
     });
   });
 

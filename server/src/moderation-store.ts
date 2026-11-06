@@ -1,17 +1,9 @@
 import { and, asc, eq } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
+import { participantColumns, toParticipant } from "./db/participant.js";
 import { liveModeration } from "./db/schema.js";
 import type { ModerationLists } from "./moderation.js";
 import type { Participant } from "./protocol/index.js";
-
-function participantColumns(participant: Participant) {
-  return {
-    participantId: participant.id,
-    participantApp: participant.app,
-    participantName: participant.name,
-    participantPicture: participant.picture ?? null,
-  };
-}
 
 /** Shadowbans et Bannissements des Lives, dans Postgres. */
 export class ModerationStore {
@@ -25,15 +17,7 @@ export class ModerationStore {
       .where(eq(liveModeration.liveId, liveId))
       .orderBy(asc(liveModeration.decidedAt), asc(liveModeration.seq));
     const lists: ModerationLists = { shadowbanned: [], banned: [] };
-    for (const row of rows) {
-      const participant: Participant = {
-        id: row.participantId,
-        app: row.participantApp,
-        name: row.participantName,
-        ...(row.participantPicture !== null && { picture: row.participantPicture }),
-      };
-      lists[row.status].push(participant);
-    }
+    for (const row of rows) lists[row.status].push(toParticipant(row, "participant"));
     return lists;
   }
 
@@ -41,7 +25,7 @@ export class ModerationStore {
   async shadowban(liveId: string, participant: Participant, at: Date): Promise<void> {
     await this.db
       .insert(liveModeration)
-      .values({ liveId, ...participantColumns(participant), status: "shadowbanned", decidedAt: at })
+      .values({ liveId, ...participantColumns(participant, "participant"), status: "shadowbanned", decidedAt: at })
       .onConflictDoNothing();
   }
 
@@ -62,7 +46,7 @@ export class ModerationStore {
   async ban(liveId: string, participant: Participant, at: Date): Promise<void> {
     await this.db
       .insert(liveModeration)
-      .values({ liveId, ...participantColumns(participant), status: "banned", decidedAt: at })
+      .values({ liveId, ...participantColumns(participant, "participant"), status: "banned", decidedAt: at })
       .onConflictDoUpdate({
         target: [liveModeration.liveId, liveModeration.participantId],
         set: { status: "banned", decidedAt: at },

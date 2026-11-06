@@ -1,0 +1,6 @@
+{
+  "type": "error",
+  "ref": "c17",
+  "code": "invalid_product",
+  "message": "Produit invalide : nom de 1 à 80 caractères, prix de 0 à 1 000 000 centimes, devise ISO 4217 en majuscules, image en https."
+}

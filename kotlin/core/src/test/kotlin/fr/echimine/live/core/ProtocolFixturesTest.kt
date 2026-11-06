@@ -39,8 +39,9 @@ class ProtocolFixturesTest {
 
     @Test
     fun lesCorpsHttpSeDecodentPuisSeReencodentALIdentique() {
+        // Le dossier fait foi : chaque fichier doit avoir son type Kotlin (`roundTripHttp` échoue sinon).
         val files = fixturesIn("http")
-        assertEquals(5, files.size)
+        assertTrue("fixtures introuvables dans $fixtures", files.isNotEmpty())
         files.forEach { file -> assertRoundTrip(file) { Wire.roundTripHttp(file.nameWithoutExtension, it) } }
     }
 
