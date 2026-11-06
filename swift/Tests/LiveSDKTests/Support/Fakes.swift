@@ -69,6 +69,7 @@ final class FakeMedia: MediaConnector, @unchecked Sendable {
     private let lock = NSLock()
     private var recorded: [String] = []
     private var failuresLeft = 0
+    private var publishFailuresLeft = 0
     private var gate: CheckedContinuation<Void, Never>?
     private var holding = false
 
@@ -76,6 +77,7 @@ final class FakeMedia: MediaConnector, @unchecked Sendable {
     var isHeld: Bool { lock.withLock { gate != nil } }
 
     func failNextConnects(_ count: Int) { lock.withLock { failuresLeft = count } }
+    func failNextPublishes(_ count: Int) { lock.withLock { publishFailuresLeft = count } }
     func holdConnects() { lock.withLock { holding = true } }
 
     func releaseConnect() {
@@ -95,6 +97,16 @@ final class FakeMedia: MediaConnector, @unchecked Sendable {
             recorded.append("connect \(url.absoluteString) \(token)")
             if failuresLeft > 0 {
                 failuresLeft -= 1
+                throw URLError(.cannotConnectToHost)
+            }
+        }
+    }
+
+    func publishCameraAndMicrophone() async throws {
+        try lock.withLock {
+            recorded.append("publish")
+            if publishFailuresLeft > 0 {
+                publishFailuresLeft -= 1
                 throw URLError(.cannotConnectToHost)
             }
         }

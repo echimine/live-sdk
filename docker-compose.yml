@@ -20,7 +20,9 @@ services:
 
   livekit:
     image: livekit/livekit-server:v1.9
-    command: --dev --bind 0.0.0.0
+    # LIVEKIT_NODE_IP : IP annoncée aux téléphones (127.0.0.1 pour le simulateur iOS sous Docker
+    # Desktop, IP locale de la machine pour un vrai téléphone). Sans elle, l'IP du conteneur.
+    command: --dev --bind 0.0.0.0 ${LIVEKIT_NODE_IP:+--node-ip ${LIVEKIT_NODE_IP}}
     ports:
       - "7880:7880"
       - "7881:7881"
