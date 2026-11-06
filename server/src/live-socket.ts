@@ -61,7 +61,9 @@ export function attachLiveSockets(server: FastifyInstance, deps: Omit<Deps, "log
     wss.handleUpgrade(request, socket, head, (ws) => new LiveSocket(ws, liveId, { ...deps, log: server.log }));
   });
 
-  server.addHook("onClose", async () => {
+  // Avant que Fastify n'attende la fin des connexions HTTP : un socket encore
+  // ouvert bloquerait sinon l'arrêt (redéploiement en plein Live).
+  server.addHook("preClose", async () => {
     for (const client of wss.clients) client.terminate();
     await new Promise((resolve) => wss.close(resolve));
   });
