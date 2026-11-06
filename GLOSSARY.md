@@ -24,6 +24,10 @@ _Avoid_: Source, provenance
 Toute personne présente dans un Live, identifiée par son App d'origine, son identifiant dans cette app, son pseudo et son avatar. Il n'existe pas de compte commun entre les apps.
 _Avoid_: Utilisateur, membre, compte
 
+**Jeton de Participant**:
+La preuve, émise par le backend de son App d'origine, de l'identité d'un Participant (App d'origine, identifiant, pseudo, avatar) ; elle ne dit rien de son rôle dans un Live.
+_Avoid_: Token d'auth, session, credential
+
 **Hôte**:
 Le Participant qui a lancé le Live ; le Live se termine quand il l'arrête.
 _Avoid_: Streamer, owner, créateur
@@ -43,6 +47,10 @@ _Avoid_: Invitation, join request
 **Animateur**:
 L'Hôte ou un Co-hôte : ceux qui peuvent épingler un Produit et modérer le Live.
 _Avoid_: Modérateur, admin, staff
+
+**Délai de grâce**:
+Le temps pendant lequel un Animateur déconnecté garde sa place dans le Live ; passé ce délai, un Co-hôte redevient Spectateur et le Live de l'Hôte se termine.
+_Avoid_: Timeout, expiration
 
 ### Les interactions
 
