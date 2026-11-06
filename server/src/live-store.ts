@@ -1,7 +1,8 @@
-import { randomBytes } from "node:crypto";
 import { and, eq, isNull } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
+import { postgresCode } from "./db/postgres-error.js";
 import { lives } from "./db/schema.js";
+import { opaqueId } from "./ids.js";
 import type { Participant } from "./protocol/index.js";
 
 export interface Live {
@@ -29,16 +30,9 @@ function toLive(row: Row): Live {
   };
 }
 
-const ID_ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789";
-
 /** Identifiant opaque d'un Live, aussi nom de sa room LiveKit : `lv_` + 12 caractères. */
 export function newLiveId(): string {
-  return `lv_${[...randomBytes(12)].map((byte) => ID_ALPHABET[byte % ID_ALPHABET.length]).join("")}`;
-}
-
-function isUniqueViolation(error: unknown): boolean {
-  const cause = (error as { cause?: { code?: string } }).cause ?? error;
-  return (cause as { code?: string }).code === "23505";
+  return opaqueId("lv_", 12);
 }
 
 /** Lives persistés dans Postgres ; un Live est en cours tant que `ended_at` est nul. */
@@ -77,7 +71,8 @@ export class LiveStore {
       });
       return live;
     } catch (error) {
-      if (isUniqueViolation(error)) return undefined;
+      // Violation d'unicité : l'Hôte a déjà un Live en cours.
+      if (postgresCode(error) === "23505") return undefined;
       throw error;
     }
   }

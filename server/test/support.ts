@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AddressInfo } from "node:net";
+import type { Writable } from "node:stream";
 import type { FastifyInstance } from "fastify";
 import { SignJWT } from "jose";
 import postgres from "postgres";
@@ -41,9 +42,10 @@ export function startTestServer(
   env: Partial<ServerEnv> = {},
   clock: Clock | (() => Date) = () => now,
   livekit: LivekitPort = new FakeLivekit(),
+  logStream?: Writable,
 ) {
   const injected = typeof clock === "function" ? { ...systemClock, now: clock } : clock;
-  return createServer({ env: testEnv(env), clock: injected, livekit });
+  return createServer({ env: testEnv(env), clock: injected, livekit, logger: logStream ? { stream: logStream } : false });
 }
 
 export interface LiveServer {
@@ -56,11 +58,14 @@ export interface LiveServer {
   openSocket(liveId: string, options?: { autoPong?: boolean }): Promise<TestSocket>;
 }
 
-/** Serveur commun à l'écoute sur un port libre, avec un faux LiveKit et une horloge manuelle. */
-export async function startLiveServer(): Promise<LiveServer> {
+/**
+ * Serveur commun à l'écoute sur un port libre, avec un faux LiveKit et une horloge
+ * manuelle. Le journal JSON part dans `logStream` s'il est donné.
+ */
+export async function startLiveServer(options: { logStream?: Writable } = {}): Promise<LiveServer> {
   const livekit = new FakeLivekit();
   const clock = new ManualClock(now);
-  const server = await startTestServer({}, clock, livekit);
+  const server = await startTestServer({}, clock, livekit, options.logStream);
   await server.listen({ port: 0, host: "127.0.0.1" });
   const { port } = server.server.address() as AddressInfo;
   const baseUrl = `http://127.0.0.1:${port}`;
@@ -77,7 +82,7 @@ export async function startLiveServer(): Promise<LiveServer> {
 export async function resetDatabase(): Promise<void> {
   const sql = postgres(databaseUrl, { max: 1, onnotice: () => {} });
   try {
-    await sql`truncate table lives`;
+    await sql`truncate table chat_messages, lives`;
   } finally {
     await sql.end({ timeout: 1 });
   }

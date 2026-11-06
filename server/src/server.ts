@@ -1,7 +1,13 @@
 import { drizzle } from "drizzle-orm/postgres-js";
-import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
+import Fastify, {
+  type FastifyInstance,
+  type FastifyReply,
+  type FastifyRequest,
+  type FastifyServerOptions,
+} from "fastify";
 import postgres from "postgres";
 import { z } from "zod";
+import { ChatStore } from "./chat-store.js";
 import { type Clock, systemClock } from "./clock.js";
 import { checkHealth } from "./health.js";
 import { attachLiveSockets } from "./live-socket.js";
@@ -32,7 +38,8 @@ export interface CreateServerOptions {
   livekit?: LivekitPort;
   /** Config servie ; par défaut la fixture du contrat. */
   configFile?: string;
-  logger?: boolean;
+  /** Journal JSON de Fastify (`true`), ou ses options (flux de sortie en test). */
+  logger?: FastifyServerOptions["logger"];
 }
 
 declare module "fastify" {
@@ -76,7 +83,15 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
   // Connexion paresseuse : le serveur démarre même si Postgres est KO, et `/health` le dit.
   const sql = postgres(env.DATABASE_URL, { max: 5, connect_timeout: 2, onnotice: () => {} });
   server.addHook("onClose", () => sql.end({ timeout: 1 }));
-  const lives = new Lives(new LiveStore(drizzle(sql)), livekit, clock, server.log);
+  const db = drizzle(sql);
+  const lives = new Lives({
+    store: new LiveStore(db),
+    chat: new ChatStore(db),
+    livekit,
+    clock,
+    log: server.log,
+    config: config.config,
+  });
   // Enregistré avant les sockets : leur fermeture ne relance aucun minuteur.
   server.addHook("preClose", async () => lives.stop());
   attachLiveSockets(server, { lives, memberApps, clock });

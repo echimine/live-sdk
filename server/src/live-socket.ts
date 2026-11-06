@@ -3,7 +3,7 @@ import type { Duplex } from "node:stream";
 import type { FastifyBaseLogger, FastifyInstance } from "fastify";
 import { type RawData, WebSocket, WebSocketServer } from "ws";
 import type { Clock, Timer } from "./clock.js";
-import type { Connection, Lives, Presence } from "./lives.js";
+import type { CommandResult, Connection, Lives, Presence } from "./lives.js";
 import type { MemberApps } from "./member-apps.js";
 import { InvalidParticipantToken, verifyParticipantToken } from "./participant-token.js";
 import { ClientMessage, type ErrorCode, Join, Ref, type ServerMessage } from "./protocol/index.js";
@@ -182,14 +182,26 @@ class LiveSocket implements Connection {
       case "join":
       case "react":
         return;
-      case "endLive": {
-        const result = await this.deps.lives.endLive(presence, () => this.send({ type: "ack", ref: message.ref }));
-        if (!result.ok) this.reject(message.ref, result.code, result.message);
-        return;
-      }
+      case "endLive":
+        return this.run(message.ref, (accepted) => this.deps.lives.endLive(presence, accepted));
+      case "sendMessage":
+        return this.run(message.ref, (accepted) => this.deps.lives.sendMessage(presence, message.text, accepted));
+      case "deleteMessage":
+        return this.run(message.ref, (accepted) => this.deps.lives.deleteMessage(presence, message.messageId, accepted));
       default:
         return this.reject(message.ref, "unknown_command", "Commande pas encore prise en charge.");
     }
+  }
+
+  /**
+   * Exécute une commande du Live : `ack` quand le Live l'accepte (avant ses
+   * diffusions), sinon `error` avec son code (et `retryAfterMs` pour `rate_limited`).
+   */
+  private async run(ref: string, command: (accepted: () => void) => Promise<CommandResult>) {
+    const result = await command(() => this.send({ type: "ack", ref }));
+    if (result.ok) return;
+    const { ok: _ok, ...error } = result;
+    this.send({ type: "error", ref, ...error });
   }
 
   private reject(ref: string | undefined, code: ErrorCode, message: string) {
