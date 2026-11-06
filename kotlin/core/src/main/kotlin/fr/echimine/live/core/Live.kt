@@ -97,7 +97,15 @@ public data class LiveDetails(
     val joinRequests: List<Participant>,
     /** Shadowbans et Bannissements : pour les Animateurs seuls. */
     val moderation: Moderation?,
-)
+    /**
+     * Spectateur : sa propre Demande de montée est en attente, jusqu'à son annulation, sa montée, son refus
+     * ([LiveEvent.JoinDeclined]) ou une reconnexion (qui l'efface).
+     */
+    val requestedToJoin: Boolean = false,
+) {
+    /** Les personnes à l'écran, dans l'ordre de la mosaïque : l'Hôte, puis les Co-hôtes par ordre de montée. */
+    public val stage: List<Participant> get() = listOf(host) + cohosts
+}
 
 /** Événements ponctuels, à animer plutôt qu'à afficher en continu. */
 public sealed interface LiveEvent {
@@ -109,6 +117,9 @@ public sealed interface LiveEvent {
 
     /** Une Annonce d'achat vient d'arriver dans le chat. */
     public data class PurchaseAnnounced(val message: ChatMessage.Purchase) : LiveEvent
+
+    /** Spectateur : l'Hôte a refusé sa Demande de montée (`requestedToJoin` repasse à `false`). */
+    public data object JoinDeclined : LiveEvent
 }
 
 /**
@@ -182,17 +193,41 @@ public class Live internal constructor(
     /** Hôte : termine le Live pour tout le monde. */
     public suspend fun endLive(): LiveResult<Unit> = command { Command.EndLive(it) }
 
-    /** Spectateur : demande à monter (une seule Demande de montée en attente). */
-    public suspend fun requestToJoin(): LiveResult<Unit> = command { Command.RequestToJoin(it) }
+    /**
+     * Spectateur : demande à monter (une seule Demande de montée en attente, `requestedToJoin` à l'`ack`).
+     * À l'acceptation, la permission de publier s'ouvre sans reconnexion.
+     */
+    public suspend fun requestToJoin(): LiveResult<Unit> =
+        command { Command.RequestToJoin(it) }.onSuccess { setRequestedToJoin(true) }
 
-    public suspend fun cancelJoinRequest(): LiveResult<Unit> = command { Command.CancelJoinRequest(it) }
+    public suspend fun cancelJoinRequest(): LiveResult<Unit> =
+        command { Command.CancelJoinRequest(it) }.onSuccess { setRequestedToJoin(false) }
 
-    /** Hôte : accepte une Demande de montée (5 Co-hôtes au plus). */
+    private fun setRequestedToJoin(requested: Boolean) = stateFlow.update { state ->
+        val live = state.live ?: return@update state
+        // Monté entre-temps : la demande n'existe plus.
+        if (requested && live.role != Role.Viewer) return@update state
+        state.copy(live = live.copy(requestedToJoin = requested))
+    }
+
+    private inline fun LiveResult<Unit>.onSuccess(action: () -> Unit): LiveResult<Unit> =
+        also { if (it is LiveResult.Success) action() }
+
+    /** Hôte : accepte une Demande de montée ([MAX_COHOSTS] Co-hôtes au plus, sinon [LiveErrorCode.CohostLimit]). */
     public suspend fun acceptJoin(participantId: String): LiveResult<Unit> =
         command { Command.AcceptJoin(it, participantId) }
 
+    /**
+     * Hôte : refuse une Demande de montée, retirée à l'`ack` (le serveur ne prévient que le Spectateur refusé,
+     * par `joinDeclined`).
+     */
     public suspend fun declineJoin(participantId: String): LiveResult<Unit> =
-        command { Command.DeclineJoin(it, participantId) }
+        command { Command.DeclineJoin(it, participantId) }.onSuccess {
+            stateFlow.update { state ->
+                val live = state.live ?: return@update state
+                state.copy(live = live.copy(joinRequests = live.joinRequests.filterNot { it.id == participantId }))
+            }
+        }
 
     /** Co-hôte : redevient Spectateur. */
     public suspend fun leaveStage(): LiveResult<Unit> = command { Command.LeaveStage(it) }
@@ -447,6 +482,7 @@ public class Live internal constructor(
                 ?.let { eventFlow.tryEmit(LiveEvent.ReactionsReceived(it)) }
             is ServerMessage.ChatMessageReceived -> (message.message as? ChatMessage.Purchase)
                 ?.let { eventFlow.tryEmit(LiveEvent.PurchaseAnnounced(it)) }
+            ServerMessage.JoinDeclined -> eventFlow.tryEmit(LiveEvent.JoinDeclined)
             else -> Unit
         }
         stateFlow.update { state ->
@@ -462,6 +498,7 @@ public class Live internal constructor(
             if (joinRequests.any { it.id == message.participant.id }) this
             else copy(joinRequests = joinRequests + message.participant)
         is ServerMessage.JoinRequestCancelled -> copy(joinRequests = joinRequests.filterNot { it.id == message.participantId })
+        ServerMessage.JoinDeclined -> copy(requestedToJoin = false)
         is ServerMessage.RoleChanged -> {
             val participant = message.participant
             val others = cohosts.filterNot { it.id == participant.id }
@@ -472,6 +509,7 @@ public class Live internal constructor(
                 cohosts = if (message.role == Role.Cohost) others + participant else others,
                 joinRequests = joinRequests.filterNot { it.id == participant.id },
                 moderation = moderation.takeIf { newRole.isAnimator },
+                requestedToJoin = requestedToJoin && !isYou,
             )
         }
         is ServerMessage.AudienceChanged -> copy(audience = Audience(message.total, message.byApp))

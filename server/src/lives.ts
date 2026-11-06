@@ -567,13 +567,14 @@ export class Lives {
     return { ok: true };
   }
 
-  /** L'Hôte refuse une Demande de montée : elle disparaît, `ack`. */
+  /** L'Hôte refuse une Demande de montée : elle disparaît, `ack`, puis `joinDeclined` chez le Spectateur. */
   declineJoin(presence: Presence, participantId: string, accepted: () => void): CommandResult {
     if (presence.role !== "host") return notHost;
     const state = this.runningFor(presence);
     if (!state) return liveNotFound;
     if (!state.stage.withdraw(participantId)) return noJoinRequest;
     accepted();
+    state.present.get(participantId)?.connection.send({ type: "joinDeclined" });
     return { ok: true };
   }
 

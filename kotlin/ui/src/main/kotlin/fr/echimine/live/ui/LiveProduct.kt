@@ -5,11 +5,6 @@ import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -63,7 +58,6 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
-import fr.echimine.live.core.ChatMessage
 import fr.echimine.live.core.Live
 import fr.echimine.live.core.LiveConfig
 import fr.echimine.live.core.LiveErrorCode
@@ -72,10 +66,6 @@ import fr.echimine.live.core.Product
 import fr.echimine.live.core.ProductImage
 import fr.echimine.live.core.productProblem
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.channels.BufferOverflow
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.buffer
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -262,58 +252,6 @@ private fun Notice(text: String) {
 private fun InlineProgress() {
     CircularProgressIndicator(strokeWidth = 2.dp, modifier = Modifier.size(20.dp), color = MaterialTheme.colorScheme.onPrimary)
 }
-
-// ------------------------------------------------------------------ toast d'Annonce d'achat
-
-/**
- * Toast des Annonces d'achat de [announcements], l'une après l'autre, quelques secondes chacune ;
- * en rafale, seules les plus récentes attendent leur tour.
- */
-@Composable
-internal fun PurchaseToast(announcements: Flow<ChatMessage.Purchase>, modifier: Modifier = Modifier) {
-    var shown by remember { mutableStateOf<ChatMessage.Purchase?>(null) }
-    LaunchedEffect(announcements) {
-        announcements.buffer(TOAST_QUEUE, BufferOverflow.DROP_OLDEST).collect { announcement ->
-            shown = announcement
-            delay(TOAST_DURATION_MS)
-            shown = null
-            delay(TOAST_GAP_MS) // laisse le toast sortir avant le suivant
-        }
-    }
-    AnimatedVisibility(
-        visible = shown != null,
-        enter = fadeIn() + slideInVertically { -it },
-        exit = fadeOut() + slideOutVertically { -it },
-        modifier = modifier,
-    ) {
-        val message = shown ?: return@AnimatedVisibility
-        Row(
-            Modifier
-                .clip(RoundedCornerShape(LocalLiveTheme.current.cornerRadius))
-                .background(MaterialTheme.colorScheme.primary)
-                .padding(horizontal = 14.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text("🛍", fontSize = 18.sp)
-            Spacer(Modifier.width(8.dp))
-            Text(
-                purchaseLine(message),
-                color = MaterialTheme.colorScheme.onPrimary,
-                fontWeight = FontWeight.SemiBold,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
-    }
-}
-
-/** « Noa a acheté Baskets Runner X · 89,99 € ». */
-internal fun purchaseLine(message: ChatMessage.Purchase): String =
-    "${message.author.name} a acheté ${message.product.name} · ${formatPrice(message.product.price, message.product.currency)}"
-
-private const val TOAST_DURATION_MS = 3_000L
-private const val TOAST_GAP_MS = 300L
-private const val TOAST_QUEUE = 3
 
 // ------------------------------------------------------------------ épingler
 

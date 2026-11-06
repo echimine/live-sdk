@@ -113,14 +113,15 @@ describe("Demandes de montée et Co-hôtes", () => {
       expect((await harness.join(created.id, lea)).reply).toMatchObject({ joinRequests: [], cohosts: [noaOnWire] });
     });
 
-    it("l'Hôte refuse : la demande disparaît, personne ne monte", async () => {
-      const { created, host } = await liveWithRequest();
+    it("l'Hôte refuse : le Spectateur reçoit `joinDeclined`, la demande disparaît, personne ne monte", async () => {
+      const { created, host, viewer } = await liveWithRequest();
 
       expect(await command(host.socket, { type: "declineJoin", participantId: noaOnWire.id })).toEqual({
         type: "ack",
         ref: "c",
       });
 
+      expect(await viewer.socket.next()).toEqual({ type: "joinDeclined" });
       expect((await harness.join(created.id, lea)).reply).toMatchObject({ joinRequests: [], cohosts: [] });
     });
 

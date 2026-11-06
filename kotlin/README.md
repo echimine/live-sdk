@@ -35,7 +35,7 @@ LiveSdk.configure(
 | --- | --- |
 | `LiveListScreen(onOpenLive, onLaunch)` | Lives en cours de toutes les App membres (titre, Hôte, App d'origine, Audience) + champ de lien direct |
 | `LiveLaunchScreen(onLaunched, onClose)` | Aperçu caméra, vérifications (caméra, micro, serveur), titre facultatif ≤ 80, « Lancer » |
-| `LiveScreen(liveId, onClose, productSource = …)` / `LiveScreen(live, onClose, productSource = …)` | Le Live en plein écran : vidéo, barre du haut (libellé du Live, 👁 Audience → feuille par App d'origine, ✕), bandeaux « Hôte déconnecté » / « Hôte revenu », pastille du Produit épinglé → fiche avec « Confirmer l'achat », 2 derniers messages, dock (💬 chat en feuille mi-hauteur, ❤️ Réaction rapide / appui long, 😀 toutes les Réactions, 🛍 produit), Réactions de tous en animation, Annonces d'achat dans le chat et en toast. Les Animateurs épinglent, changent ou retirent le produit depuis 🛍. Pour l'Hôte, ✕ propose de terminer le Live puis affiche le récapitulatif de fin (Achats, Réactions, Audience max.) ; pour les autres, la fin du Live s'annonce avec « Fermer » |
+| `LiveScreen(liveId, onClose, productSource = …)` / `LiveScreen(live, onClose, productSource = …)` | Le Live en plein écran : mosaïque portrait jusqu'à 6 (1 plein écran, 2 empilées, 2 × 2, 2 × 3 ; Hôte en haut à gauche puis Co-hôtes par ordre de montée, chaque tuile reçue dans la qualité adaptée à sa taille), barre du haut (libellé du Live, 👁 Audience → feuille par App d'origine, ✕), bandeaux « Hôte déconnecté » / « Hôte revenu », pastille du Produit épinglé → fiche avec « Confirmer l'achat », 2 derniers messages, dock (💬 chat en feuille mi-hauteur, ❤️ Réaction rapide / appui long, 😀 toutes les Réactions, 🛍 produit, ✋ Demande de montée, ⚙️ Gestion pour les Animateurs), Réactions de tous en animation, Annonces d'achat dans le chat et en toast, refus d'une Demande de montée en toast. Les Animateurs épinglent, changent ou retirent le produit depuis 🛍. ✋ : le Spectateur demande à monter (caméra et micro autorisés d'abord) ou annule, le Co-hôte redescend. ⚙️ Gestion (badge = Demandes de montée en attente) : l'Hôte accepte ou refuse les demandes et retire les Co-hôtes, avec la limite de 5 Co-hôtes affichée. Pour l'Hôte, ✕ propose de terminer le Live puis affiche le récapitulatif de fin (Achats, Réactions, Audience max.) ; pour les autres, la fin du Live s'annonce avec « Fermer » |
 
 Sans les écrans, le cœur suffit : `live.sendMessage(text)` refuse un message vide ou trop long
 (`InvalidMessage`) sans rien envoyer, et verrouille le chat après un `rate_limited`
@@ -46,6 +46,15 @@ Sans les écrans, le cœur suffit : `live.sendMessage(text)` refuse un message v
 un crash). `live.endLive()` le termine pour tous : la fin arrive dans `live.state` (`Connection.Ended`),
 avec `summary` pour l'Hôte seul. L'Audience est dans `live.state.value.live?.audience`
 (`audience.ranked` : par App d'origine, de la plus présente à la moins présente).
+
+## Co-hôtes
+
+Sans les écrans : `live.requestToJoin()` puis `live.cancelJoinRequest()` pour le Spectateur
+(`live.state.value.live?.requestedToJoin`, effacé à la montée, au refus — annoncé par `LiveEvent.JoinDeclined` — ou à
+une reconnexion), `live.leaveStage()` pour le Co-hôte, `acceptJoin(id)`, `declineJoin(id)` et `removeCohost(id)`
+pour l'Hôte (`CohostLimit` au-delà de `MAX_COHOSTS`). `live.state.value.live?.stage` donne l'ordre de la
+mosaïque. À la montée, le serveur ouvre la publication sans nouveau jeton : `LiveScreen` allume caméra et
+micro dans la room déjà connectée, et les éteint à la descente.
 
 ## Produit épinglé et Source de produits
 

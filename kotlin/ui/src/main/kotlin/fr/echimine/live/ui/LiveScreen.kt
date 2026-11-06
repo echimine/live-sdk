@@ -45,8 +45,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import kotlinx.coroutines.flow.filterIsInstance
-import kotlinx.coroutines.flow.map
 import fr.echimine.live.core.Live
 import fr.echimine.live.core.LiveClient
 import fr.echimine.live.core.LiveEvent
@@ -82,7 +80,7 @@ public fun LiveScreen(
 }
 
 /**
- * Un Live ouvert en plein écran : vidéo de l'Hôte, barre du haut (libellé du Live, ✕), Produit épinglé et dock.
+ * Un Live ouvert en plein écran : mosaïque de l'Hôte et des Co-hôtes, barre du haut (libellé du Live, ✕), Produit épinglé et dock.
  * Quitte [live] quand l'écran disparaît. [productSource] : le catalogue de l'App membre, proposé
  * aux Animateurs pour préremplir le produit à épingler.
  */
@@ -108,7 +106,9 @@ public fun LiveScreen(
     var endOpen by rememberSaveable(live.id) { mutableStateOf(false) }
     var productOpen by rememberSaveable(live.id) { mutableStateOf(false) }
     var pinOpen by rememberSaveable(live.id) { mutableStateOf(false) }
-    val announcements = remember(live) { live.events.filterIsInstance<LiveEvent.PurchaseAnnounced>().map { it.message } }
+    var stageOpen by rememberSaveable(live.id) { mutableStateOf(false) }
+    var managementOpen by rememberSaveable(live.id) { mutableStateOf(false) }
+    val toasts = remember(live) { live.events.toasts() }
     val animator = details?.role?.isAnimator == true
     // L'Hôte termine son Live en le quittant ; les autres le quittent simplement.
     val hosting = hostIsYou && interactive
@@ -120,7 +120,9 @@ public fun LiveScreen(
 
     LiveSdkTheme {
         Box(modifier.fillMaxSize().background(Color.Black)) {
-            VideoTrackView(room, camera, mirror = hostIsYou, modifier = Modifier.fillMaxSize())
+            if (details != null) {
+                StageMosaic(room, details.stage, details.you, Modifier.fillMaxSize())
+            }
             Scrims()
             Column(Modifier.fillMaxSize().safeDrawingPadding()) {
                 TopBar(state, hosting, onQuit, onOpenAudience = { audienceOpen = true })
@@ -129,7 +131,7 @@ public fun LiveScreen(
                     if (interactive && !hostIsYou && state.connection == Connection.Connected) {
                         HostPresenceBanner(details.hostConnected, Modifier.align(Alignment.TopCenter).padding(top = 8.dp))
                     }
-                    PurchaseToast(announcements, Modifier.align(Alignment.TopCenter).padding(top = 52.dp, start = 16.dp, end = 16.dp))
+                    LiveToasts(toasts, Modifier.align(Alignment.TopCenter).padding(top = 52.dp, start = 16.dp, end = 16.dp))
                     StatusOverlay(state, hasVideo = camera != null, onClose = onClose)
                     FloatingReactionsLayer(
                         floating,
@@ -165,6 +167,19 @@ public fun LiveScreen(
                                 modifier = Modifier.clickable { if (animator) pinOpen = true else productOpen = true },
                             )
                         }
+                        // ✋ : le Spectateur demande à monter, le Co-hôte redescend.
+                        if (!hostIsYou) {
+                            StageDockButton(details, onClick = { stageOpen = true })
+                        }
+                        // ⚙️ Gestion : le badge compte les Demandes de montée en attente (reçues par l'Hôte seul).
+                        if (animator) {
+                            BadgedDockButton(
+                                "⚙️",
+                                description = "Gestion",
+                                count = details.joinRequests.size,
+                                onClick = { managementOpen = true },
+                            )
+                        }
                     }
                 }
             }
@@ -182,6 +197,12 @@ public fun LiveScreen(
             }
             if (pinOpen && interactive && animator) {
                 PinProductSheet(live, config, details.pinnedProduct, productSource, onDismiss = { pinOpen = false })
+            }
+            if (stageOpen && interactive && !hostIsYou) {
+                StageSheet(live, details, onDismiss = { stageOpen = false })
+            }
+            if (managementOpen && interactive && animator) {
+                ManagementSheet(live, details, onDismiss = { managementOpen = false })
             }
             if (endOpen && interactive) {
                 EndLiveDialog(live, onDismiss = { endOpen = false })
@@ -256,7 +277,7 @@ private fun TopBar(state: LiveState, hosting: Boolean, onClose: () -> Unit, onOp
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
-                    hostLine(details.host),
+                    participantLine(details.host),
                     color = Color.White.copy(alpha = 0.75f),
                     fontSize = 12.sp,
                     maxLines = 1,
@@ -273,7 +294,7 @@ private fun TopBar(state: LiveState, hosting: Boolean, onClose: () -> Unit, onOp
     }
 }
 
-/** Le dock, en bas : 💬 chat, ❤️ Réaction rapide, 😀 toutes les Réactions, 🛍 produit (puis 👥, ✋). */
+/** Le dock, en bas : 💬 chat, ❤️ Réaction rapide, 😀 toutes les Réactions, 🛍 produit, ✋ montée, ⚙️ Gestion. */
 @Composable
 private fun Dock(content: @Composable RowScope.() -> Unit) {
     Row(
@@ -338,7 +359,7 @@ internal fun CloseButton(description: String, onClick: () -> Unit) {
 }
 
 /** « pseudo · App d'origine ». */
-internal fun hostLine(host: Participant): String = "${host.name} · ${host.app}"
+internal fun participantLine(participant: Participant): String = "${participant.name} · ${participant.app}"
 
 @Composable
 internal fun Loading() {

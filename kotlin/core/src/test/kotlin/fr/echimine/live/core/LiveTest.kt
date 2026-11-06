@@ -134,14 +134,128 @@ class LiveTest {
     fun unSpectateurQuiMonteDevientCoHoteEtAnimateur() = runTest {
         val client = configure()
         val live = connectedLive(client)
-        transport.socket.push(
-            """{"type":"roleChanged","participant":{"id":"twitch:u_88","app":"twitch","name":"Noa"},"role":"cohost"}""",
-        )
-        runCurrent()
+        pushRoleChanged(NOA, "cohost")
 
         assertEquals(Role.Cohost, live.details().role)
         assertTrue(live.details().role.isAnimator)
         assertEquals(listOf("Sam", "Noa"), live.details().cohosts.map { it.name })
+        client.close()
+    }
+
+    /** Envoie la commande [type] lancée par [send], y répond par [reply] (à partir de son `ref`) et rend son résultat. */
+    private suspend fun TestScope.answered(
+        type: String,
+        reply: (ref: String) -> String,
+        send: suspend () -> LiveResult<Unit>,
+    ): LiveResult<Unit> {
+        val result = async { send() }
+        runCurrent()
+        val ref = transport.socket.lastSent(type)["ref"]!!.jsonPrimitive.content
+        transport.socket.push(reply(ref))
+        runCurrent()
+        return result.await()
+    }
+
+    private suspend fun TestScope.acked(type: String, send: suspend () -> LiveResult<Unit>): LiveResult<Unit> =
+        answered(type, { ref -> """{"type":"ack","ref":"$ref"}""" }, send)
+
+    /** Le serveur annonce que [participant] (JSON) passe au rôle [role]. */
+    private fun TestScope.pushRoleChanged(participant: String, role: String) {
+        transport.socket.push("""{"type":"roleChanged","participant":$participant,"role":"$role"}""")
+        runCurrent()
+    }
+
+    @Test
+    fun laDemandeDeMonteeResteEnAttenteJusquaSonAnnulation() = runTest {
+        val client = configure()
+        val live = connectedLive(client)
+        assertFalse(live.details().requestedToJoin)
+
+        assertEquals(LiveResult.Success(Unit), acked("requestToJoin") { live.requestToJoin() })
+        assertTrue(live.details().requestedToJoin)
+
+        assertEquals(LiveResult.Success(Unit), acked("cancelJoinRequest") { live.cancelJoinRequest() })
+        assertFalse(live.details().requestedToJoin)
+        client.close()
+    }
+
+    @Test
+    fun unRefusDeLHoteEffaceLaDemandeEtLAnnonce() = runTest {
+        val client = configure()
+        val live = connectedLive(client)
+        val events = mutableListOf<LiveEvent>()
+        backgroundScope.launch(StandardTestDispatcher(testScheduler)) { live.events.toList(events) }
+        acked("requestToJoin") { live.requestToJoin() }
+
+        transport.socket.push(fixture("ws/server/joinDeclined.json"))
+        runCurrent()
+
+        assertFalse(live.details().requestedToJoin)
+        assertEquals(listOf<LiveEvent>(LiveEvent.JoinDeclined), events)
+        client.close()
+    }
+
+    @Test
+    fun laDemandeDeMonteeDisparaitALaMonteeEtALaReconnexion() = runTest {
+        val client = configure()
+        val live = connectedLive(client)
+        acked("requestToJoin") { live.requestToJoin() }
+        pushRoleChanged(NOA, "cohost")
+        assertFalse(live.details().requestedToJoin)
+
+        pushRoleChanged(NOA, "viewer")
+        acked("requestToJoin") { live.requestToJoin() }
+        assertTrue(live.details().requestedToJoin)
+
+        // Le serveur oublie la demande quand le socket se ferme : le `snapshot` suivant n'en a plus.
+        transport.socket.drop()
+        advanceTimeBy(1_001)
+        runCurrent()
+        transport.socket.push(fixture("ws/server/snapshot.viewer.json"))
+        runCurrent()
+        assertFalse(live.details().requestedToJoin)
+        client.close()
+    }
+
+    @Test
+    fun laMosaiquePlaceLHoteEnPremierPuisLesCoHotesParOrdreDeMontee() = runTest {
+        val client = configure()
+        val live = connectedLive(client, "ws/server/snapshot.host.json")
+        acked("acceptJoin") { live.acceptJoin("twitch:u_88") }
+        pushRoleChanged(NOA, "cohost")
+        assertEquals(listOf("Léa", "Sam", "Noa"), live.details().stage.map { it.name })
+        assertTrue(live.details().joinRequests.isEmpty())
+
+        // Sam redescend : Noa prend sa place, l'ordre de montée est gardé.
+        pushRoleChanged(SAM, "viewer")
+        assertEquals(listOf("Léa", "Noa"), live.details().stage.map { it.name })
+        client.close()
+    }
+
+    @Test
+    fun uneDemandeRefuseeQuitteLaListeDeLHote() = runTest {
+        val client = configure()
+        val live = connectedLive(client, "ws/server/snapshot.host.json")
+        assertEquals(listOf("Noa"), live.details().joinRequests.map { it.name })
+
+        // Le serveur ne prévient que le Spectateur refusé : l'Hôte retire la demande à l'`ack`.
+        assertEquals(LiveResult.Success(Unit), acked("declineJoin") { live.declineJoin("twitch:u_88") })
+        assertTrue(live.details().joinRequests.isEmpty())
+        client.close()
+    }
+
+    @Test
+    fun auDelaDeCinqCoHotesLAcceptationEchoueAvecCohostLimit() = runTest {
+        val client = configure()
+        val live = connectedLive(client, "ws/server/snapshot.host.json")
+
+        val result = answered(
+            "acceptJoin",
+            { ref -> """{"type":"error","ref":"$ref","code":"cohost_limit","message":"Déjà 5 Co-hôtes à l'écran."}""" },
+        ) { live.acceptJoin("twitch:u_88") }
+
+        assertEquals(LiveErrorCode.CohostLimit, (result as LiveResult.Failure).error.code)
+        assertEquals(listOf("Noa"), live.details().joinRequests.map { it.name })
         client.close()
     }
 
@@ -510,3 +624,9 @@ class LiveTest {
         client.close()
     }
 }
+
+/** Noa, en Demande de montée dans `snapshot.host.json`. */
+private const val NOA = """{"id":"twitch:u_88","app":"twitch","name":"Noa"}"""
+
+/** Sam, Co-hôte dans les fixtures `snapshot.*`. */
+private const val SAM = """{"id":"snapcore:u_310","app":"snapcore","name":"Sam"}"""

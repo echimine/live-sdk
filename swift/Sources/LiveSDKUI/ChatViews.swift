@@ -51,22 +51,20 @@ enum PriceText {
 }
 
 struct RecentMessages: View {
-    let session: LiveSession
-    let onSelect: (ChatMessage) -> Void
+    let messages: [ChatMessage]
     @Environment(\.liveTheme) private var theme
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            ForEach(session.messages.suffix(2)) { message in
+            ForEach(messages.suffix(2)) { message in
                 ChatMessageRow(message: message, onVideo: true)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 6)
                     .background(.black.opacity(0.45), in: RoundedRectangle(cornerRadius: theme.cornerRadius))
-                    .modifier(ModeratableMessage(session: session, message: message, onSelect: onSelect))
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .animation(.easeOut(duration: 0.2), value: session.messages.last?.id)
+        .animation(.easeOut(duration: 0.2), value: messages.last?.id)
     }
 }
 
@@ -76,7 +74,6 @@ struct ChatSheet: View {
     @State private var draft = ""
     @State private var sendError: String?
     @State private var sending = false
-    @State private var selectedForModeration: ChatMessage?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -84,10 +81,7 @@ struct ChatSheet: View {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 12) {
                         ForEach(session.messages) { message in
-                            ChatMessageRow(message: message, onVideo: false)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .modifier(ModeratableMessage(session: session, message: message) { selectedForModeration = $0 })
-                                .id(message.id)
+                            ChatMessageRow(message: message, onVideo: false).id(message.id)
                         }
                     }
                     .padding(16)
@@ -100,7 +94,6 @@ struct ChatSheet: View {
             Divider()
             composer
         }
-        .moderationDialog(session: session, message: $selectedForModeration)
         .font(theme.font(16))
         .tint(theme.accent)
     }
