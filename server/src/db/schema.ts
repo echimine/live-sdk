@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { bigserial, index, integer, pgTable, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
+import { bigserial, boolean, index, integer, pgTable, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
 
 /** Lives, en cours (`ended_at` nul) ou terminés. L'Hôte est figé au lancement. */
 export const lives = pgTable(
@@ -67,6 +67,8 @@ export const chatMessages = pgTable(
     productId: text("product_id").references(() => products.id),
     sentAt: timestamp("sent_at", { withTimezone: true, precision: 3 }).notNull(),
     deletedAt: timestamp("deleted_at", { withTimezone: true, precision: 3 }),
+    /** Envoyé en Shadowban : visible de son seul auteur, pour toujours. */
+    hidden: boolean("hidden").notNull().default(false),
   },
   (table) => [index("chat_messages_live_seq").on(table.liveId, table.seq)],
 );
@@ -111,4 +113,25 @@ export const purchases = pgTable(
     purchasedAt: timestamp("purchased_at", { withTimezone: true, precision: 3 }).notNull(),
   },
   (table) => [index("purchases_live").on(table.liveId)],
+);
+
+/**
+ * Shadowbans et Bannissements des Lives, un par Participant : un Bannissement
+ * remplace un Shadowban, un Shadowban levé est retiré. `seq` donne l'ordre des décisions.
+ */
+export const liveModeration = pgTable(
+  "live_moderation",
+  {
+    seq: bigserial("seq", { mode: "number" }).primaryKey(),
+    liveId: text("live_id")
+      .notNull()
+      .references(() => lives.id),
+    participantId: text("participant_id").notNull(),
+    participantApp: text("participant_app").notNull(),
+    participantName: text("participant_name").notNull(),
+    participantPicture: text("participant_picture"),
+    status: text("status", { enum: ["shadowbanned", "banned"] }).notNull(),
+    decidedAt: timestamp("decided_at", { withTimezone: true, precision: 3 }).notNull(),
+  },
+  (table) => [uniqueIndex("live_moderation_one_per_participant").on(table.liveId, table.participantId)],
 );

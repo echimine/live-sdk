@@ -8,6 +8,12 @@ type Row = typeof chatMessages.$inferSelect;
 type ProductRow = typeof products.$inferSelect;
 type TextMessage = Extract<ChatMessage, { kind: "text" }>;
 
+/** Message récent du chat ; `hidden` : envoyé en Shadowban, visible de son seul auteur. */
+export interface RecentMessage {
+  message: ChatMessage;
+  hidden: boolean;
+}
+
 /** Message tel qu'il part sur le fil ; une Annonce d'achat reprend le produit acheté. */
 function toMessage(row: Row, product: ProductRow | null): ChatMessage | undefined {
   const base = {
@@ -46,7 +52,8 @@ async function withoutChatText<T>(operation: string, run: () => Promise<T>): Pro
 export class ChatStore {
   constructor(private readonly db: PostgresJsDatabase) {}
 
-  async insert(liveId: string, message: TextMessage): Promise<void> {
+  /** `hidden` : envoyé en Shadowban, visible de son seul auteur. */
+  async insert(liveId: string, message: TextMessage, hidden: boolean): Promise<void> {
     await withoutChatText("écriture du message", () => this.db.insert(chatMessages).values({
       id: message.id,
       liveId,
@@ -58,6 +65,7 @@ export class ChatStore {
       kind: message.kind,
       text: message.text,
       sentAt: new Date(message.at),
+      hidden,
     }));
   }
 
@@ -75,9 +83,9 @@ export class ChatStore {
 
   /**
    * Les `limit` derniers messages non supprimés d'un Live, Annonces d'achat
-   * comprises, du plus ancien au plus récent.
+   * comprises, du plus ancien au plus récent, ceux envoyés en Shadowban compris.
    */
-  async recent(liveId: string, limit: number): Promise<ChatMessage[]> {
+  async recent(liveId: string, limit: number): Promise<RecentMessage[]> {
     const rows = await this.db
       .select({ message: chatMessages, product: products })
       .from(chatMessages)
@@ -85,6 +93,9 @@ export class ChatStore {
       .where(and(eq(chatMessages.liveId, liveId), isNull(chatMessages.deletedAt)))
       .orderBy(desc(chatMessages.seq))
       .limit(limit);
-    return rows.reverse().flatMap(({ message, product }) => toMessage(message, product) ?? []);
+    return rows.reverse().flatMap(({ message: row, product }) => {
+      const message = toMessage(row, product);
+      return message ? [{ message, hidden: row.hidden }] : [];
+    });
   }
 }

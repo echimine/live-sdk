@@ -17,6 +17,7 @@ import { LiveStore } from "./live-store.js";
 import { createLivekitPort, type LivekitPort } from "./livekit.js";
 import { Lives } from "./lives.js";
 import { loadMemberApps } from "./member-apps.js";
+import { ModerationStore } from "./moderation-store.js";
 import { ProductStore } from "./product-store.js";
 import { Quota } from "./rate-limit.js";
 import { InvalidParticipantToken, verifyParticipantToken } from "./participant-token.js";
@@ -152,6 +153,7 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
     store: new LiveStore(db),
     chat: new ChatStore(db),
     products: new ProductStore(db),
+    moderation: new ModerationStore(db),
     livekit,
     clock,
     log: server.log,

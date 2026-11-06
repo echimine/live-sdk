@@ -21,6 +21,8 @@ export interface LivekitPort {
   deleteRoom(room: string): Promise<void>;
   issueToken(request: LivekitTokenRequest): Promise<string>;
   setCanPublish(room: string, identity: string, canPublish: boolean): Promise<void>;
+  /** Retire un Participant de la room (Bannissement) ; sans effet s'il n'y est pas. */
+  removeParticipant(room: string, identity: string): Promise<void>;
 }
 
 /** Les jetons LiveKit ne servent qu'à la connexion ; chaque `join` en émet un nouveau. */
@@ -59,6 +61,13 @@ export function createLivekitPort(options: { url: string; apiKey: string; apiSec
     },
     async setCanPublish(room, identity, canPublish) {
       await rooms.updateParticipant(room, identity, { permission: permission(canPublish) });
+    },
+    async removeParticipant(room, identity) {
+      try {
+        await rooms.removeParticipant(room, identity);
+      } catch (error) {
+        if ((error as { status?: number }).status !== 404) throw error;
+      }
     },
   };
 }

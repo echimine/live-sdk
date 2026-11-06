@@ -1,9 +1,11 @@
 import { chatText, newMessageId } from "./chat.js";
-import type { ChatStore } from "./chat-store.js";
+import type { ChatStore, RecentMessage } from "./chat-store.js";
 import type { Clock, Timer } from "./clock.js";
 import type { LivekitPort } from "./livekit.js";
 import { SlidingWindow } from "./rate-limit.js";
 import { newProductId, type ProductStore, type PurchaseMessage } from "./product-store.js";
+import { LiveModeration } from "./moderation.js";
+import type { ModerationStore } from "./moderation-store.js";
 import { LiveReactions } from "./reactions.js";
 import { LiveShop, productInput } from "./shop.js";
 import { LiveStage, MAX_COHOSTS } from "./stage.js";
@@ -31,6 +33,7 @@ export const CHAT_LIMIT: Record<Role, number> = { viewer: 5, cohost: 20, host: 2
 export const SNAPSHOT_MESSAGES = 50;
 
 type Audience = Omit<Extract<ServerMessage, { type: "audience" }>, "type">;
+
 
 /** Journal des erreurs survenues hors d'une requête (minuteurs). */
 export interface Logger {
@@ -62,7 +65,7 @@ interface RunningLive {
    * Derniers messages du chat, tenus à jour avec les diffusions : le `snapshot`
    * les sert sans relire la base, donc sans manquer un message envoyé entre-temps.
    */
-  recentMessages: ChatMessage[];
+  recentMessages: RecentMessage[];
   /** Messages récents de chaque Participant, pour la limite du chat. */
   chatWindow: SlidingWindow;
   /** Réactions : agrégation, diffusion et total conservé. */
@@ -73,6 +76,8 @@ interface RunningLive {
   cohostGrace: Map<string, Timer>;
   /** Produit épinglé et Achats. */
   shop: LiveShop;
+  /** Shadowbans et Bannissements. */
+  moderation: LiveModeration;
 }
 
 /** Un Live en cours vu par `GET /admin/state`. */
@@ -96,6 +101,8 @@ export type CommandResult =
 const liveNotFound = { ok: false, code: "live_not_found", message: "Ce Live n'existe pas ou est terminé." } as const;
 const notHost = { ok: false, code: "not_host", message: "Seul l'Hôte peut faire cela." } as const;
 const noJoinRequest = { ok: false, code: "not_found", message: "Aucune Demande de montée de ce Participant." } as const;
+const bannedFromLive = { ok: false, code: "banned", message: "Vous êtes banni de ce Live." } as const;
+const notAnimatorForModeration = { ok: false, code: "not_animator", message: "Seuls les Animateurs peuvent modérer." } as const;
 const notAnimatorForProduct = {
   ok: false,
   code: "not_animator",
@@ -106,6 +113,7 @@ export interface LivesDeps {
   store: LiveStore;
   chat: ChatStore;
   products: ProductStore;
+  moderation: ModerationStore;
   livekit: LivekitPort;
   clock: Clock;
   log: Logger;
@@ -127,6 +135,7 @@ export class Lives {
   private readonly store: LiveStore;
   private readonly chat: ChatStore;
   private readonly products: ProductStore;
+  private readonly moderation: ModerationStore;
   private readonly livekit: LivekitPort;
   private readonly clock: Clock;
   private readonly log: Logger;
@@ -136,6 +145,7 @@ export class Lives {
     this.store = deps.store;
     this.chat = deps.chat;
     this.products = deps.products;
+    this.moderation = deps.moderation;
     this.livekit = deps.livekit;
     this.clock = deps.clock;
     this.log = deps.log;
@@ -248,6 +258,7 @@ export class Lives {
   async join(liveId: string, participant: Participant, connection: Connection): Promise<JoinResult> {
     const state = await this.load(liveId);
     if (!state || state.ending) return liveNotFound;
+    if (state.moderation.isBanned(participant.id)) return bannedFromLive;
 
     let role = roleOf(state, participant.id);
     let livekitToken = await this.issueLivekitToken(liveId, participant, role);
@@ -258,6 +269,8 @@ export class Lives {
     }
     // Le Live a pu se terminer pendant l'émission du jeton.
     if (this.running.get(liveId) !== state || state.ending) return liveNotFound;
+    // Banni pendant l'émission du jeton.
+    if (state.moderation.isBanned(participant.id)) return bannedFromLive;
     role = roleOf(state, participant.id);
 
     const presence: Presence = { liveId, participant, role, connection };
@@ -335,6 +348,7 @@ export class Lives {
       const limit = CHAT_LIMIT[presence.role];
       return { ok: false, code: "rate_limited", message: `Doucement… (${limit} messages par 10 s)`, retryAfterMs };
     }
+    const hidden = state.moderation.isShadowbanned(author);
     const message = {
       id: newMessageId(),
       kind: "text",
@@ -344,7 +358,7 @@ export class Lives {
       at: sentAt.toISOString(),
     } satisfies ChatMessage;
     try {
-      await this.chat.insert(state.live.id, message);
+      await this.chat.insert(state.live.id, message, hidden);
     } catch (error) {
       // Message perdu : il ne compte pas dans la limite.
       state.chatWindow.giveBack(author, sentAt);
@@ -352,15 +366,20 @@ export class Lives {
     }
     // Le Live a pu se terminer pendant l'écriture : le message est conservé, sans diffusion.
     if (state.ending || this.running.get(state.live.id) !== state) return liveNotFound;
-    this.announce(state, message, accepted);
+    this.announce(state, { message, hidden }, accepted);
     return { ok: true };
   }
 
-  /** `onAccepted`, puis le message rejoint les derniers messages et part dans le chat de tous. */
-  private announce(state: RunningLive, message: ChatMessage, onAccepted: () => void): void {
-    state.recentMessages = [...state.recentMessages, message].slice(-SNAPSHOT_MESSAGES);
+  /**
+   * `onAccepted`, puis le message rejoint les derniers messages et part dans le
+   * chat de tous ; envoyé en Shadowban, il ne part que chez son auteur.
+   */
+  private announce(state: RunningLive, recent: RecentMessage, onAccepted: () => void): void {
+    state.recentMessages = [...state.recentMessages, recent].slice(-SNAPSHOT_MESSAGES);
     onAccepted();
-    broadcast(state, { type: "chatMessage", message });
+    const chatMessage = { type: "chatMessage", message: recent.message } as const;
+    if (recent.hidden) state.present.get(recent.message.author.id)?.connection.send(chatMessage);
+    else broadcast(state, chatMessage);
   }
 
   /**
@@ -426,6 +445,8 @@ export class Lives {
       return { ok: false, code: "rate_limited", message: "Un Achat par seconde au plus.", retryAfterMs };
     }
     const { id, name, price, currency } = product;
+    // En Shadowban, l'Achat compte, mais son Annonce n'est visible que de l'acheteur.
+    const hidden = state.moderation.isShadowbanned(buyer);
     const message = {
       id: newMessageId(),
       kind: "purchase",
@@ -435,7 +456,7 @@ export class Lives {
       at: at.toISOString(),
     } satisfies PurchaseMessage;
     try {
-      await this.products.recordPurchase(state.live.id, message);
+      await this.products.recordPurchase(state.live.id, message, hidden);
     } catch (error) {
       // Achat perdu : il ne compte pas dans la limite.
       state.shop.giveBackPurchase(buyer, at);
@@ -444,7 +465,7 @@ export class Lives {
     state.shop.purchases++;
     // Le Live a pu se terminer pendant l'écriture : l'Achat est conservé, sans annonce.
     if (state.ending || this.running.get(state.live.id) !== state) return liveNotFound;
-    this.announce(state, message, accepted);
+    this.announce(state, { message, hidden }, accepted);
     return { ok: true };
   }
 
@@ -461,7 +482,7 @@ export class Lives {
     if (!(await this.chat.markDeleted(state.live.id, messageId, this.clock.now()))) {
       return { ok: false, code: "not_found", message: "Message introuvable." };
     }
-    state.recentMessages = state.recentMessages.filter((message) => message.id !== messageId);
+    state.recentMessages = state.recentMessages.filter((recent) => recent.message.id !== messageId);
     // Complété avant l'annonce : qui rejoint après `messageDeleted` reçoit bien 50 messages.
     // La suppression est faite : un échec du complément ne la remet pas en cause.
     await this.refillRecentMessages(state).catch((error: unknown) => {
@@ -484,7 +505,8 @@ export class Lives {
     const stored = await this.chat.recent(state.live.id, SNAPSHOT_MESSAGES);
     const current = state.recentMessages;
     const oldestKept = current[0];
-    const olderCount = oldestKept === undefined ? stored.length : stored.findIndex((m) => m.id === oldestKept.id);
+    const olderCount =
+      oldestKept === undefined ? stored.length : stored.findIndex((m) => m.message.id === oldestKept.message.id);
     // Le plus ancien gardé n'est plus en base (supprimé pendant la lecture) : on laisse la mémoire telle quelle.
     if (olderCount <= 0) return;
     state.recentMessages = [...stored.slice(0, olderCount), ...current].slice(-SNAPSHOT_MESSAGES);
@@ -620,10 +642,135 @@ export class Lives {
     }
   }
 
+  /**
+   * Un Animateur met un Participant en Shadowban : enregistré, `ack`, puis
+   * `moderationChanged` aux Animateurs. Sans effet s'il y est déjà ou est banni.
+   */
+  async shadowban(presence: Presence, participantId: string, accepted: () => void): Promise<CommandResult> {
+    const state = this.runningFor(presence);
+    if (!state) return liveNotFound;
+    const target = this.moderationTarget(state, presence, participantId);
+    if (!target.ok) return target;
+    // Retenu en mémoire avant l'écriture, comme une montée : les droits vérifiés restent valables.
+    const changed = state.moderation.shadowban(target.participant);
+    if (changed) {
+      try {
+        await this.moderation.shadowban(state.live.id, target.participant, this.clock.now());
+      } catch (error) {
+        state.moderation.unshadowban(participantId);
+        throw error;
+      }
+      if (!this.isRunning(state)) return liveNotFound;
+    }
+    accepted();
+    if (changed) moderationChanged(state);
+    return { ok: true };
+  }
+
+  /** Un Animateur lève un Shadowban : `ack`, puis `moderationChanged` aux Animateurs s'il y en avait un. */
+  async unshadowban(presence: Presence, participantId: string, accepted: () => void): Promise<CommandResult> {
+    if (presence.role === "viewer") return notAnimatorForModeration;
+    const state = this.runningFor(presence);
+    if (!state) return liveNotFound;
+    const lifted = state.moderation.unshadowban(participantId);
+    if (lifted) {
+      try {
+        await this.moderation.unshadowban(state.live.id, participantId);
+      } catch (error) {
+        state.moderation.shadowban(lifted);
+        throw error;
+      }
+      if (!this.isRunning(state)) return liveNotFound;
+    }
+    accepted();
+    if (lifted) moderationChanged(state);
+    return { ok: true };
+  }
+
+  /**
+   * Un Animateur bannit un Participant de ce Live : enregistré, `ack`, puis le banni
+   * reçoit `banned` et son socket se ferme ; un Co-hôte redescend ensuite parmi les
+   * Spectateurs. Enfin `moderationChanged` aux Animateurs. Ses messages restent.
+   */
+  async ban(presence: Presence, participantId: string, accepted: () => void): Promise<CommandResult> {
+    const state = this.runningFor(presence);
+    if (!state) return liveNotFound;
+    const target = this.moderationTarget(state, presence, participantId);
+    if (!target.ok) return target;
+    // Retenu en mémoire avant l'écriture : un `join` en cours est refusé, et les droits vérifiés restent valables.
+    const banned = state.moderation.ban(target.participant);
+    if (!banned) {
+      accepted();
+      return { ok: true };
+    }
+    try {
+      await this.moderation.ban(state.live.id, target.participant, this.clock.now());
+    } catch (error) {
+      state.moderation.undoBan(target.participant, banned);
+      throw error;
+    }
+    if (!this.isRunning(state)) return liveNotFound;
+    accepted();
+    this.exclude(state, participantId);
+    if (state.stage.withdraw(participantId)) toHost(state, { type: "joinRequestCancelled", participantId });
+    if (state.stage.isCohost(participantId)) {
+      // Déjà exclu : un échec de la descente ne le garde pas dans le Live, il est seulement journalisé.
+      await this.demote(state, participantId).catch((error: unknown) => {
+        this.log.error({ err: error, liveId: state.live.id }, "descente d'un Co-hôte banni impossible");
+      });
+    }
+    moderationChanged(state);
+    return { ok: true };
+  }
+
+  /** Le Live est toujours en cours avec cet état (il a pu se terminer pendant une écriture). */
+  private isRunning(state: RunningLive): boolean {
+    return !state.ending && this.running.get(state.live.id) === state;
+  }
+
+  /** Exclut un Participant banni : `banned`, socket fermé, retiré de la room LiveKit. */
+  private exclude(state: RunningLive, participantId: string): void {
+    const presence = state.present.get(participantId);
+    if (presence) {
+      // Retiré avant la fermeture : son départ ne lance ni Délai de grâce ni diffusion.
+      state.present.delete(participantId);
+      presence.connection.send({ type: "banned" });
+      presence.connection.end();
+      this.scheduleAudience(state);
+    }
+    this.livekit.removeParticipant(state.live.id, participantId).catch((error: unknown) => {
+      this.log.error({ err: error, liveId: state.live.id }, "retrait d'un Participant banni de la room impossible");
+    });
+  }
+
+  /**
+   * Le Participant visé par une modération, s'il peut l'être par cet Animateur :
+   * jamais l'Hôte, un Co-hôte par l'Hôte seul (`not_animator`). `not_found` s'il
+   * est inconnu de ce Live (ni présent, ni à l'écran, ni dans le chat récent).
+   */
+  private moderationTarget(
+    state: RunningLive,
+    presence: Presence,
+    participantId: string,
+  ): { ok: true; participant: Participant } | Extract<CommandResult, { ok: false }> {
+    if (presence.role === "viewer") return notAnimatorForModeration;
+    if (participantId === state.live.host.id) {
+      return { ok: false, code: "not_animator", message: "L'Hôte ne peut pas être modéré." };
+    }
+    if (state.stage.isCohost(participantId) && presence.role !== "host") {
+      return { ok: false, code: "not_animator", message: "Seul l'Hôte peut modérer un Co-hôte." };
+    }
+    const participant = knownParticipant(state, participantId);
+    if (!participant) return { ok: false, code: "not_found", message: "Participant introuvable dans ce Live." };
+    return { ok: true, participant };
+  }
+
   /** Un Participant envoie une Réaction : sans `ack`, diffusée à tous avec les autres (voir `LiveReactions`). */
   react(presence: Presence, emoji: string): void {
     const state = this.running.get(presence.liveId);
-    if (state && !state.ending) state.reactions.add(presence.participant.id, emoji);
+    // En Shadowban, les Réactions sont ignorées en silence.
+    if (!state || state.ending || state.moderation.isShadowbanned(presence.participant.id)) return;
+    state.reactions.add(presence.participant.id, emoji);
   }
 
   /** Prévoit une diffusion de l'Audience, au plus tôt `AUDIENCE_INTERVAL_MS` après la précédente. */
@@ -735,8 +882,9 @@ export class Lives {
         this.store.listCohosts(liveId),
         this.products.findPinned(liveId),
         this.products.countPurchases(liveId),
+        this.moderation.lists(liveId),
       ])
-        .then(([live, recentMessages, cohosts, pinned, purchases]) => {
+        .then(([live, recentMessages, cohosts, pinned, purchases, moderation]) => {
           if (!live) return undefined;
           const loaded: RunningLive = {
             live,
@@ -752,6 +900,7 @@ export class Lives {
             stage: new LiveStage(cohosts),
             cohostGrace: new Map(),
             shop: new LiveShop(pinned, purchases),
+            moderation: new LiveModeration(moderation),
           };
           this.running.set(liveId, loaded);
           // Aucun Animateur n'est encore là (lancement, redémarrage) : leur Délai de grâce court dès maintenant.
@@ -779,11 +928,14 @@ export class Lives {
       ...(state.shop.pinned && { pinnedProduct: state.shop.pinned }),
       audience: audienceOf(state),
       reactionsTotal: state.reactions.total,
-      messages: state.recentMessages,
+      // Un message envoyé en Shadowban n'est servi qu'à son auteur.
+      messages: state.recentMessages
+        .filter(({ message, hidden }) => !hidden || message.author.id === presence.participant.id)
+        .map(({ message }) => message),
       livekit: { url: this.livekit.url, token: livekitToken },
       // Demandes de montée pour l'Hôte seul, modération pour les Animateurs seuls.
       ...(presence.role === "host" && { joinRequests: state.stage.joinRequests }),
-      ...(presence.role !== "viewer" && { moderation: { shadowbanned: [], banned: [] } }),
+      ...(presence.role !== "viewer" && { moderation: state.moderation.lists }),
     };
   }
 }
@@ -814,6 +966,26 @@ function cancelCohostGrace(state: RunningLive, participantId: string): void {
 function cancelAllCohostGrace(state: RunningLive): void {
   for (const timer of state.cohostGrace.values()) timer.cancel();
   state.cohostGrace.clear();
+}
+
+/** Envoie les listes de modération à jour aux Animateurs connectés. */
+function moderationChanged(state: RunningLive): void {
+  const message: ServerMessage = { type: "moderationChanged", ...state.moderation.lists };
+  for (const presence of state.present.values()) {
+    if (presence.role !== "viewer") presence.connection.send(message);
+  }
+}
+
+/** Ce Participant tel que le Live le connaît : présent, à l'écran, en demande, modéré ou auteur récent. */
+function knownParticipant(state: RunningLive, participantId: string): Participant | undefined {
+  const { moderation, stage } = state;
+  return (
+    state.present.get(participantId)?.participant ??
+    stage.cohosts.find((p) => p.id === participantId) ??
+    stage.requestOf(participantId) ??
+    [...moderation.lists.shadowbanned, ...moderation.lists.banned].find((p) => p.id === participantId) ??
+    state.recentMessages.findLast(({ message }) => message.author.id === participantId)?.message.author
+  );
 }
 
 /** Envoie un message à l'Hôte, s'il est connecté. */

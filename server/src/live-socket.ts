@@ -311,8 +311,12 @@ class LiveSocket implements Connection {
         return this.run(message.ref, (accepted) => lives.unpinProduct(presence, accepted));
       case "purchase":
         return this.run(message.ref, (accepted) => lives.purchase(presence, message.productId, accepted));
-      default:
-        return this.reject(message.ref, "unknown_command", "Commande pas encore prise en charge.");
+      case "shadowban":
+        return this.run(message.ref, (accepted) => lives.shadowban(presence, message.participantId, accepted));
+      case "unshadowban":
+        return this.run(message.ref, (accepted) => lives.unshadowban(presence, message.participantId, accepted));
+      case "ban":
+        return this.run(message.ref, (accepted) => lives.ban(presence, message.participantId, accepted));
     }
   }
 
